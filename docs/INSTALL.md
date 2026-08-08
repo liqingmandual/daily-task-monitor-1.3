@@ -8,12 +8,12 @@
 
 ## 安装 1.3 独立版
 
-1. 打开项目的 [Releases](https://github.com/zhengrunze201022-maker/daily-task-monitor-1.3/releases)。
-2. 下载 `每日任务监测系统 1.3 独立版安装包.exe`。
+1. 打开项目的 [Releases](https://github.com/liqingmandual/daily-task-monitor-1.3/releases)。
+2. 下载 `DailyTaskMonitor-1.3.0-x64-setup.exe`。
 3. 在 Release 页面复制安装包的 SHA-256；也可以用以下命令计算本地文件哈希：
 
    ```powershell
-   Get-FileHash '.\每日任务监测系统 1.3 独立版安装包.exe' -Algorithm SHA256
+   Get-FileHash '.\DailyTaskMonitor-1.3.0-x64-setup.exe' -Algorithm SHA256
    ```
 
 4. 双击安装包，按安装向导完成安装。

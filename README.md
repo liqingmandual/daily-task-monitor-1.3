@@ -1,7 +1,7 @@
 # 每日任务监测系统 1.3 独立版
 
-[![CI](https://github.com/zhengrunze201022-maker/daily-task-monitor-1.3/actions/workflows/ci.yml/badge.svg)](https://github.com/zhengrunze201022-maker/daily-task-monitor-1.3/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/zhengrunze201022-maker/daily-task-monitor-1.3)](https://github.com/zhengrunze201022-maker/daily-task-monitor-1.3/releases)
+[![CI](https://github.com/liqingmandual/daily-task-monitor-1.3/actions/workflows/ci.yml/badge.svg)](https://github.com/liqingmandual/daily-task-monitor-1.3/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/liqingmandual/daily-task-monitor-1.3)](https://github.com/liqingmandual/daily-task-monitor-1.3/releases)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 一个面向 Windows 10/11 的本地优先时间监测与任务分析工具。它记录应用使用、活跃与不活跃时间，将学习、搜索和开发活动整理成趋势与工作流，并提供可选的 AI 分析。
@@ -28,7 +28,7 @@
 
 ## 下载与安装
 
-前往 [Releases](https://github.com/zhengrunze201022-maker/daily-task-monitor-1.3/releases) 下载 `每日任务监测系统 1.3 独立版安装包.exe`，双击并按安装向导操作。
+前往 [Releases](https://github.com/liqingmandual/daily-task-monitor-1.3/releases) 下载 `DailyTaskMonitor-1.3.0-x64-setup.exe`，双击并按安装向导操作。
 
 安装包目前未进行商业代码签名，Windows SmartScreen 可能显示提醒。请从本仓库 Release 下载，并核对 Release 页面提供的 SHA-256。
 
@@ -94,7 +94,7 @@ src-tauri\target\release\bundle\nsis\
 
 ## 反馈
 
-如果遇到分类、监测连续性、安装或界面问题，请在 [Issues](https://github.com/zhengrunze201022-maker/daily-task-monitor-1.3/issues) 中说明系统版本、应用版本、复现步骤和预期结果。请勿上传数据库、API Key 或包含隐私信息的窗口标题。
+如果遇到分类、监测连续性、安装或界面问题，请在 [Issues](https://github.com/liqingmandual/daily-task-monitor-1.3/issues) 中说明系统版本、应用版本、复现步骤和预期结果。请勿上传数据库、API Key 或包含隐私信息的窗口标题。
 
 ## License
 
