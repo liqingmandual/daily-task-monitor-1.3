@@ -1,0 +1,135 @@
+{
+  "fallback": "未分类",
+  "categories": [
+    {
+      "name": "创作/开发",
+      "color": "#1E40AF",
+      "rules": [
+        { "process": "Codex" },
+        { "process": "Code" },
+        { "process": "devenv" },
+        { "process": "pycharm" },
+        { "process": "idea" },
+        { "process": "webstorm" },
+        { "process": "cursor" },
+        { "title": "Visual Studio Code" },
+        { "title": "GitHub" },
+        { "title": "server.js" },
+        { "title": "dashboard" },
+        { "title": "OpenAI API" },
+        { "title": "Codex" }
+      ]
+    },
+    {
+      "name": "文档/输出",
+      "color": "#047857",
+      "rules": [
+        { "process": "WINWORD" },
+        { "process": "EXCEL" },
+        { "process": "POWERPNT" },
+        { "process": "notion" },
+        { "process": "obsidian" },
+        { "process": "typora" },
+        { "title": "文档" },
+        { "title": "写作" },
+        { "title": "Markdown" },
+        { "title": ".md" }
+      ]
+    },
+    {
+      "name": "搜索/调研",
+      "color": "#D97706",
+      "rules": [
+        { "title": "Google" },
+        { "title": "Bing" },
+        { "title": "百度" },
+        { "title": "搜索" },
+        { "title": "知乎" },
+        { "title": "Wikipedia" },
+        { "title": "ChatGPT" },
+        { "title": "Perplexity" },
+        { "title": "Radboud" },
+        { "title": "Psychology" },
+        { "title": "Study programme" },
+        { "title": "Course catalogue" },
+        { "title": "Bachelor Psychology" },
+        { "title": "心理学" },
+        { "title": "课程" }
+      ]
+    },
+    {
+      "name": "沟通",
+      "color": "#7C3AED",
+      "rules": [
+        { "process": "WeChat" },
+        { "process": "WXWork" },
+        { "process": "Feishu" },
+        { "process": "Lark" },
+        { "process": "Teams" },
+        { "process": "OUTLOOK" },
+        { "title": "邮箱" },
+        { "title": "会议" },
+        { "title": "聊天" }
+      ]
+    },
+    {
+      "name": "娱乐/休息",
+      "color": "#DC2626",
+      "rules": [
+        { "process": "steam" },
+        { "process": "WeGame" },
+        { "process": "wegame" },
+        { "process": "LeagueClientUx" },
+        { "process": "League of Legends" },
+        { "process": "icreateLol" },
+        { "title": "League of Legends" },
+        { "title": "WeGame" },
+        { "title": "精彩时刻" },
+        { "title": "哔哩哔哩" },
+        { "title": "bilibili" },
+        { "title": "YouTube" },
+        { "title": "Netflix" },
+        { "title": "游戏" }
+      ]
+    },
+    {
+      "name": "文件整理",
+      "color": "#0891B2",
+      "rules": [
+        { "process": "explorer" },
+        { "process": "Everything" },
+        { "title": "文件资源管理器" },
+        { "title": "桌面" }
+      ]
+    },
+    {
+      "name": "系统/工具",
+      "color": "#475569",
+      "rules": [
+        { "process": "powershell" },
+        { "process": "pwsh" },
+        { "process": "WindowsTerminal" },
+        { "process": "cmd" },
+        { "process": "Taskmgr" },
+        { "process": "TX Mascot" },
+        { "process": "pallas" },
+        { "process": "ACE-Helper" },
+        { "title": "ASUSMascot" }
+      ]
+    },
+    {
+      "name": "空闲",
+      "color": "#94A3B8",
+      "rules": [
+        { "process": "LockApp" },
+        { "process": "Idle" },
+        { "title": "Windows 默认锁屏界面" }
+      ]
+    },
+    {
+      "name": "未分类",
+      "color": "#64748B",
+      "rules": []
+    }
+  ]
+}

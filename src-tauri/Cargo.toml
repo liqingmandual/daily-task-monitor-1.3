@@ -1,0 +1,63 @@
+[package]
+name = "daily-task-monitor"
+version = "1.3.0"
+edition = "2024"
+
+[features]
+default = ["bundled-sqlite", "desktop"]
+bundled-sqlite = ["rusqlite/bundled"]
+desktop = [
+    "dep:base64",
+    "dep:directories",
+    "dep:keyring",
+    "dep:png",
+    "dep:reqwest",
+    "dep:rfd",
+    "dep:tauri",
+    "dep:tokio",
+    "dep:windows",
+]
+
+[lib]
+name = "daily_task_monitor_core"
+path = "src/lib.rs"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[[bin]]
+name = "daily-task-monitor"
+path = "src/main.rs"
+required-features = ["desktop"]
+
+[dependencies]
+base64 = { version = "0.22", optional = true }
+chrono = { version = "0.4", default-features = false, features = ["std", "serde", "clock"] }
+directories = { version = "6", optional = true }
+keyring = { version = "3", features = ["windows-native"], optional = true }
+png = { version = "0.17", optional = true }
+rusqlite = { version = "0.40" }
+html5gum = { version = "0.8", default-features = false }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"], optional = true }
+rfd = { version = "0.15", optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tauri = { version = "2.11", features = ["tray-icon"], optional = true }
+tokio = { version = "1", features = ["net", "rt-multi-thread", "time"], optional = true }
+url = "2.5"
+zip = { version = "2.4", default-features = false, features = ["deflate"] }
+windows = { version = "0.62", features = [
+    "Media_Control",
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+], optional = true }
+
+[dev-dependencies]
+pretty_assertions = "1"
+
+[build-dependencies]
+tauri-build = { version = "2.6", features = [] }
