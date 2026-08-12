@@ -723,16 +723,20 @@ fn resolve_app_identities(apps: Vec<AppIdentityRequest>) -> Vec<AppIdentityDto> 
             }
 
             let cached = resolve_executable_identity(&executable_path);
+            let display_name = canonical_display_name(
+                &raw_name,
+                &cached.product_name,
+                &executable_path,
+            );
+            let icon_data_url = cached
+                .icon_data_url
+                .or_else(|| embedded_product_icon_data_url(&executable_path));
             Some(AppIdentityDto {
-                display_name: canonical_display_name(
-                    &raw_name,
-                    &cached.product_name,
-                    &executable_path,
-                ),
+                display_name,
                 raw_name,
                 executable_path,
                 product_name: cached.product_name,
-                icon_data_url: cached.icon_data_url,
+                icon_data_url,
             })
         })
         .collect()
@@ -882,6 +886,16 @@ fn png_data_url(bytes: &[u8]) -> String {
     )
 }
 
+fn embedded_product_icon_data_url(executable_path: &str) -> Option<String> {
+    let current_executable = std::env::current_exe().ok()?;
+    let current_key = normalize_executable_path(current_executable.to_str()?);
+    let requested_key = normalize_executable_path(executable_path);
+    if requested_key.is_empty() || requested_key != current_key {
+        return None;
+    }
+    Some(png_data_url(include_bytes!("../icons/icon.png")))
+}
+
 #[cfg(target_os = "windows")]
 fn extract_executable_icon(executable_path: &str) -> Option<Vec<u8>> {
     if executable_path.is_empty() || !Path::new(executable_path).is_file() {
@@ -906,7 +920,56 @@ fn extract_executable_icon(executable_path: &str) -> Option<Vec<u8>> {
     bytes
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+fn extract_executable_icon(executable_path: &str) -> Option<Vec<u8>> {
+    let executable = Path::new(executable_path);
+    let app_bundle = executable
+        .ancestors()
+        .find(|path| path.extension().is_some_and(|extension| extension == "app"))?;
+    let info_plist = app_bundle.join("Contents/Info.plist");
+    let icon_name = Command::new("/usr/bin/plutil")
+        .args(["-extract", "CFBundleIconFile", "raw", "-o", "-"])
+        .arg(&info_plist)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())?
+        .trim()
+        .to_string();
+    if icon_name.is_empty() || icon_name.starts_with('.') {
+        return None;
+    }
+    let icon_name = if Path::new(&icon_name).extension().is_some() {
+        icon_name
+    } else {
+        format!("{icon_name}.icns")
+    };
+    let icon_path = app_bundle.join("Contents/Resources").join(icon_name);
+    if !icon_path.is_file() {
+        return None;
+    }
+
+    let output_path = std::env::temp_dir().join(format!(
+        "daily-task-monitor-icon-{:x}.png",
+        Sha256::digest(executable_path.as_bytes())
+    ));
+    let converted = Command::new("/usr/bin/sips")
+        .args(["-s", "format", "png"])
+        .arg(&icon_path)
+        .arg("--out")
+        .arg(&output_path)
+        .output()
+        .ok()
+        .is_some_and(|output| output.status.success());
+    let bytes = converted
+        .then(|| fs::read(&output_path).ok())
+        .flatten()
+        .filter(|bytes| is_png(bytes));
+    let _ = fs::remove_file(output_path);
+    bytes
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn extract_executable_icon(_executable_path: &str) -> Option<Vec<u8>> {
     None
 }

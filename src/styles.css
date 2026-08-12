@@ -217,8 +217,11 @@ main { width: min(1600px, 100%); margin: 0 auto; padding: 20px 24px 48px; }
 .metric-link-icon { position: absolute; right: 12px; top: 13px; color: var(--accent); opacity: .58; transition: transform .18s ease, opacity .18s ease; }
 .metric-card.interactive:hover .metric-link-icon { opacity: 1; transform: translateX(2px); }
 .app-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
-.app-row span { min-width: 0; }.app-logo { margin-left: auto; width: 26px; height: 26px; display: inline-grid; place-items: center; flex: 0 0 26px; border-radius: 6px; background: var(--surface); box-shadow: inset 0 0 0 1px var(--border); }
-.app-logo.chrome { color: #4285f4; }.app-logo.edge { color: #0aa0f0; }.app-logo.code { color: #1684d8; }.app-logo.obsidian { color: #7c3aed; }.app-logo.wechat { color: #07c160; }.app-logo.qq { color: #16a5e9; }.app-logo.fallback { color: var(--muted); }
+.app-row span { min-width: 0; }.app-logo { margin-left: auto; width: 26px; height: 26px; display: inline-grid; place-items: center; flex: 0 0 26px; overflow: hidden; line-height: 0; border-radius: 6px; background: var(--surface); box-shadow: inset 0 0 0 1px var(--border); }
+.app-logo.app-logo { display: inline-flex; align-items: center; justify-content: center; }
+.app-logo > svg { display: block; margin: 0; }
+.app-logo.native { object-fit: contain; object-position: center; padding: 2px; }
+.app-logo.chrome { color: initial; }.app-logo.cursor { color: var(--text); }.app-logo.edge { color: #0aa0f0; }.app-logo.code { color: #1684d8; }.app-logo.obsidian { color: #7c3aed; }.app-logo.wechat { color: #07c160; }.app-logo.qq { color: #16a5e9; }.app-logo.fallback { color: var(--muted); }
 .donut-interactive { min-width: 126px; border-radius: 8px; }.donut-interactive:focus-visible { outline: 3px solid color-mix(in srgb, var(--primary) 30%, transparent); outline-offset: 2px; }.sr-only { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0,0,0,0) !important; white-space: nowrap !important; border: 0 !important; }
 .chart-selection { margin-top: 10px; color: var(--text); background: color-mix(in srgb, var(--primary-soft) 66%, var(--surface)); border: 1px solid color-mix(in srgb, var(--primary) 25%, var(--border)); border-radius: 7px; }
 .chart-selection { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; }
