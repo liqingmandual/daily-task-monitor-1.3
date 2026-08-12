@@ -5,7 +5,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
-use directories::UserDirs;
+use directories::{ProjectDirs, UserDirs};
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -57,8 +57,10 @@ use crate::domain::{ActivityCategory, ActivityScope, TrendPayload, VideoPurpose}
 use crate::edition::current_edition_identity;
 use crate::knowledge_graph::{KnowledgeGraphFilters, KnowledgeGraphPayload};
 use crate::legacy::{LegacyImportResult, import_activity_jsonl};
+#[cfg(target_os = "macos")]
+use crate::macos_collector::{MacOsCollector as PlatformCollector, system_uptime_ms};
 use crate::monitor::MonitorEngine;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use crate::monitor_continuity::{continuity_gap_segment, monitoring_gap_from_checkpoint};
 use crate::report::{ReportBlock, ReportDocument, render_docx, render_markdown};
 use crate::trend_analysis::{
@@ -69,7 +71,7 @@ use crate::trends::{
     TrendSelectionMode, TrendWorkbenchError, TrendWorkbenchPayload, TrendWorkbenchRequest,
 };
 #[cfg(target_os = "windows")]
-use crate::windows_collector::{WindowsCollector, system_uptime_ms};
+use crate::windows_collector::{WindowsCollector as PlatformCollector, system_uptime_ms};
 use crate::work_ledger::commands::{
     DailyActualOutputProgressRequest, DailyGoalTaskConfirmationRequest, EvidenceAssignmentRequest,
     MergeTasksRequest, ProgressEntryRequest, ProjectSaveRequest, SuggestedAssignmentRequest,
@@ -1211,9 +1213,9 @@ fn set_monitoring_state(
         })
         .map_err(|error| error.to_string())?;
     let observed_at_ms = now_ms();
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     let uptime_ms = system_uptime_ms();
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let uptime_ms = 0;
     service
         .database()
@@ -2058,19 +2060,21 @@ where
     F: FnOnce(&str) -> Option<String>,
 {
     let configured_path = configured_path.trim().to_string();
-    let path = if configured_path.is_empty() {
-        Path::new("codex")
+    let executable = if configured_path.is_empty() {
+        "codex"
     } else {
-        Path::new(&configured_path)
+        &configured_path
     };
-    let detected_path = (configured_path.is_empty() || path.components().count() == 1)
-        .then(|| detect(path.to_string_lossy().as_ref()))
+    let is_bare_name = !executable.contains(['/', '\\']);
+    let detected_path = (configured_path.is_empty() || is_bare_name)
+        .then(|| detect(executable))
         .flatten();
     (configured_path, detected_path)
 }
 
 fn detect_executable_on_path(name: &str) -> Option<String> {
     let search_path = std::env::var_os("PATH")?;
+    #[allow(unused_mut)]
     let mut names = vec![name.to_string()];
     #[cfg(target_os = "windows")]
     if Path::new(name).extension().is_none() {
@@ -2735,12 +2739,17 @@ pub fn run() {
         .expect("failed to run Daily Task Monitor");
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn is_browser_app(app: &str) -> bool {
     let app = app.to_ascii_lowercase();
     [
         "chrome",
+        "google chrome",
         "msedge",
+        "microsoft edge",
+        "safari",
+        "arc",
+        "brave browser",
         "brave",
         "opera",
         "vivaldi",
@@ -2830,7 +2839,7 @@ pub(crate) fn current_ai_execution_snapshot(
     build_ai_execution_snapshot(&settings, &providers, evidence_hash, created_at_ms)
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub fn enqueue_segment_classification_job(
     database: &Database,
     segment: &ActivitySegmentRecord,
@@ -2860,7 +2869,7 @@ pub fn enqueue_segment_classification_job(
     )
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub fn enqueue_segment_classification_job_with_privacy(
     database: &Database,
     segment: &ActivitySegmentRecord,
@@ -2875,7 +2884,7 @@ pub fn enqueue_segment_classification_job_with_privacy(
         .map_err(|error| error.to_string())
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn enqueue_segment_for_ai(
     database: &Database,
     settings: &AppSettings,
@@ -2888,12 +2897,12 @@ fn enqueue_segment_for_ai(
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn start_monitoring_worker(app: tauri::AppHandle) {
     std::thread::spawn(move || {
         const GAP_THRESHOLD_MS: i64 = 15_000;
         const HISTORY_REPAIR_LOOKBACK_MS: i64 = 30 * 24 * 60 * 60 * 1_000;
-        let mut collector = WindowsCollector::default();
+        let mut collector = PlatformCollector::default();
         let mut engine = MonitorEngine::new(6 * 60 * 1_000);
         let mut was_monitoring = false;
         let mut historical_repair_checked = false;
@@ -3065,7 +3074,7 @@ fn start_monitoring_worker(app: tauri::AppHandle) {
     });
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn start_monitoring_worker(_app: tauri::AppHandle) {}
 
 fn start_browser_worker(app: tauri::AppHandle) {
@@ -4489,13 +4498,33 @@ fn parse_daily_analysis_response(content: &str) -> Result<DailyAnalysisAiResult,
 }
 
 fn discover_browser_sources() -> Vec<BrowserSource> {
+    #[cfg(target_os = "windows")]
     let local_app_data = std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_default();
+    #[cfg(target_os = "windows")]
     let roots = [
         ("Chrome", local_app_data.join("Google/Chrome/User Data")),
         ("Edge", local_app_data.join("Microsoft/Edge/User Data")),
+        (
+            "Brave",
+            local_app_data.join("BraveSoftware/Brave-Browser/User Data"),
+        ),
     ];
+    #[cfg(target_os = "macos")]
+    let roots = UserDirs::new()
+        .map(|dirs| dirs.home_dir().join("Library/Application Support"))
+        .map(|support| {
+            [
+                ("Chrome", support.join("Google/Chrome")),
+                ("Edge", support.join("Microsoft Edge")),
+                ("Brave", support.join("BraveSoftware/Brave-Browser")),
+                ("Arc", support.join("Arc/User Data")),
+            ]
+        })
+        .unwrap_or_default();
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let roots: [(&str, PathBuf); 0] = [];
     let mut sources = Vec::new();
     for (browser, root) in roots {
         let profiles = fs::read_dir(&root)
@@ -4630,11 +4659,7 @@ fn now_ms() -> i64 {
 }
 
 fn app_data_dir() -> PathBuf {
-    std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("data"))
-        .join(current_edition_identity().storage_name)
-        .join("data")
+    platform_storage_root().join("data")
 }
 
 fn backup_database_before_1_3_migration(data_dir: &Path) -> std::io::Result<()> {
@@ -4656,11 +4681,21 @@ fn backup_database_before_1_3_migration(data_dir: &Path) -> std::io::Result<()> 
 }
 
 fn icon_cache_dir() -> PathBuf {
-    std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("data"))
-        .join(current_edition_identity().storage_name)
-        .join("icon-cache")
+    platform_storage_root().join("icon-cache")
+}
+
+fn platform_storage_root() -> PathBuf {
+    #[cfg(target_os = "windows")]
+    if let Some(path) = std::env::var_os("LOCALAPPDATA") {
+        return PathBuf::from(path).join(current_edition_identity().storage_name);
+    }
+    ProjectDirs::from(
+        "com",
+        "DailyTaskMonitor",
+        current_edition_identity().storage_name,
+    )
+    .map(|dirs| dirs.data_local_dir().to_path_buf())
+    .unwrap_or_else(|| PathBuf::from("data").join(current_edition_identity().storage_name))
 }
 
 #[cfg(test)]

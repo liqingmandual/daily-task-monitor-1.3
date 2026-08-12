@@ -21,5 +21,7 @@ pub mod work_ledger;
 
 #[cfg(feature = "desktop")]
 pub mod desktop;
+#[cfg(all(feature = "desktop", target_os = "macos"))]
+pub mod macos_collector;
 #[cfg(all(feature = "desktop", target_os = "windows"))]
 pub mod windows_collector;
