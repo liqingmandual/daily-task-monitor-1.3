@@ -25,6 +25,7 @@ capture, key contents, cookies, or form contents.
 - `src/`: React UI and Tauri bridge.
 - `docs/PRODUCT_AND_COMPETITORS.md`: product gap analysis and roadmap.
 - `docs/MACOS.md`: macOS implementation, permissions, and validation.
+- `docs/MACOS_P0_ACCEPTANCE.md`: latest real-device P0 acceptance result.
 - `docs/BROWSER_WATCHER.md`: watcher privacy boundary, protocol, and setup.
 
 ## Development rules

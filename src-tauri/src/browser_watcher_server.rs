@@ -188,7 +188,39 @@ fn write_response(stream: &mut TcpStream, response: Response) -> std::io::Result
 
 #[cfg(test)]
 mod tests {
-    use super::{find_header_end, response};
+    use std::io::{Read, Write};
+    use std::net::{Shutdown, TcpListener, TcpStream};
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+
+    use crate::browser_watcher::BrowserHeartbeat;
+
+    use super::{find_header_end, handle_connection, response, write_response};
+
+    fn exchange(
+        request: String,
+        token: &str,
+        received: Arc<Mutex<Vec<BrowserHeartbeat>>>,
+    ) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("test listener should bind");
+        let address = listener.local_addr().unwrap();
+        let client = thread::spawn(move || {
+            let mut stream = TcpStream::connect(address).expect("test client should connect");
+            stream.write_all(request.as_bytes()).unwrap();
+            stream.shutdown(Shutdown::Write).unwrap();
+            let mut response = String::new();
+            stream.read_to_string(&mut response).unwrap();
+            response
+        });
+        let (mut stream, _) = listener.accept().expect("test server should accept");
+        let response = handle_connection(&mut stream, token, &|heartbeat| {
+            received.lock().unwrap().push(heartbeat);
+            Ok(())
+        });
+        write_response(&mut stream, response).unwrap();
+        drop(stream);
+        client.join().unwrap()
+    }
 
     #[test]
     fn locates_complete_http_headers() {
@@ -204,5 +236,38 @@ mod tests {
         let response = response(422, "invalid heartbeat");
         assert_eq!(response.status, 422);
         assert_eq!(response.body, "invalid heartbeat");
+    }
+
+    #[test]
+    fn accepts_an_authenticated_heartbeat_over_loopback_http() {
+        let body = r#"{"protocolVersion":1,"sourceId":"chrome-test","browser":"chromium","profile":"default","tabId":"7","capturedAtMs":1000,"url":"https://example.com/work","title":"Work","active":true,"private":false}"#;
+        let request = format!(
+            "POST /v1/heartbeat HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nX-Daily-Task-Monitor-Token: local-token\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(), body
+        );
+        let received = Arc::new(Mutex::new(Vec::new()));
+
+        let response = exchange(request, "local-token", received.clone());
+
+        assert!(response.starts_with("HTTP/1.1 202 Accepted"));
+        let received = received.lock().unwrap();
+        assert_eq!(received.len(), 1);
+        assert_eq!(received[0].source_id, "chrome-test");
+        assert_eq!(received[0].url, "https://example.com/work");
+    }
+
+    #[test]
+    fn rejects_a_wrong_token_before_processing_the_heartbeat() {
+        let body = r#"{"protocolVersion":1,"sourceId":"chrome-test","browser":"chromium","profile":"default","tabId":"7","capturedAtMs":1000,"url":"https://example.com/work","title":"Work","active":true,"private":false}"#;
+        let request = format!(
+            "POST /v1/heartbeat HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nX-Daily-Task-Monitor-Token: wrong-token\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(), body
+        );
+        let received = Arc::new(Mutex::new(Vec::new()));
+
+        let response = exchange(request, "local-token", received.clone());
+
+        assert!(response.starts_with("HTTP/1.1 401 Unauthorized"));
+        assert!(received.lock().unwrap().is_empty());
     }
 }

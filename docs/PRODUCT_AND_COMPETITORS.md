@@ -88,8 +88,9 @@ Reference: <https://timingapp.com/help/faq>
 - [x] Add browser watcher protocol v1 and local extension sources for Chromium,
   Firefox, and Safari; history visits remain separate from measured duration.
 - [x] Add permission diagnostics and an explicit collection-health screen.
-- [ ] Keep Windows and macOS collector tests green in CI and record the final
-  real-device macOS regression. The two-platform CI matrix is configured.
+- [ ] Keep Windows and macOS collector tests green in CI. The final real-device
+  macOS regression is recorded; the two-platform CI matrix is configured and
+  now runs for every pushed branch.
 
 Signed, notarized macOS packaging is deliberately deferred until a later
 distribution phase.
