@@ -16,6 +16,7 @@ import type {
 } from "./activity-composition";
 
 export const ANALYSIS_CHANGED_EVENT = "analysis-changed";
+export const OPEN_SETTINGS_EVENT = "open-settings";
 
 export interface AnalysisChangedEvent {
   page: "daily" | "trends";
@@ -1080,6 +1081,12 @@ export function isDesktopRuntime(): boolean {
   return typeof window !== "undefined" && Boolean(window.__TAURI_INTERNALS__);
 }
 
+export function usesNativeMacSettingsMenu(): boolean {
+  return isDesktopRuntime()
+    && typeof navigator !== "undefined"
+    && /Macintosh|Mac OS X/i.test(navigator.userAgent);
+}
+
 export function dayBounds(date: string): { startMs: number; endMs: number } {
   const start = parseLocalDate(date);
   const end = new Date(start);
@@ -1423,6 +1430,10 @@ export async function listenCollectionHealthChanged(
   return listen<{ observedAtMs: number }>(COLLECTION_HEALTH_CHANGED_EVENT, (event) => {
     handler(event.payload);
   });
+}
+
+export async function listenOpenSettings(handler: () => void): Promise<UnlistenFn> {
+  return listen<void>(OPEN_SETTINGS_EVENT, handler);
 }
 
 export async function listBrowserSources(): Promise<BrowserSource[]> {

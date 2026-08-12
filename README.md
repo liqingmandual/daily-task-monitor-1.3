@@ -1,4 +1,4 @@
-# 每日任务监测系统 1.3 独立版
+# Orbit
 
 [![CI](https://github.com/liqingmandual/daily-task-monitor-1.3/actions/workflows/ci.yml/badge.svg)](https://github.com/liqingmandual/daily-task-monitor-1.3/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/liqingmandual/daily-task-monitor-1.3)](https://github.com/liqingmandual/daily-task-monitor-1.3/releases)
@@ -6,7 +6,7 @@
 
 一个面向 Windows 10/11 的本地优先时间监测与任务分析工具。它记录应用使用、活跃与不活跃时间，将学习、搜索和开发活动整理成趋势与工作流，并提供可选的 AI 分析。
 
-1.3 独立版拥有独立的安装标识、数据目录、凭据空间和进程锁，可以与其他版本并行安装，不会覆盖 TimeWheel 或每日任务监测系统的其他版本。
+Orbit 1.3 独立版拥有独立的安装标识、数据目录、凭据空间和进程锁，可以与其他版本并行安装，不会覆盖 TimeWheel 或 Orbit 的其他版本。
 
 ## 主要功能
 
@@ -28,7 +28,7 @@
 
 ## 下载与安装
 
-前往 [Releases](https://github.com/liqingmandual/daily-task-monitor-1.3/releases) 下载 `DailyTaskMonitor-1.3.0-x64-setup.exe`，双击并按安装向导操作。
+前往 [Releases](https://github.com/liqingmandual/daily-task-monitor-1.3/releases) 下载 `Orbit-1.3.0-x64-setup.exe`，双击并按安装向导操作。
 
 安装包目前未进行商业代码签名，Windows SmartScreen 可能显示提醒。请从本仓库 Release 下载，并核对 Release 页面提供的 SHA-256。
 

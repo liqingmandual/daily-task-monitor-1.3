@@ -2,7 +2,7 @@
 
 ## Positioning
 
-Daily Task Monitor should become a local-first, cross-platform and explainable
+Orbit should become a local-first, cross-platform and explainable
 activity tracker for knowledge work. It should automatically capture apps and
 active websites, organize fragmented activity into projects and tasks, and
 provide focus, learning, and healthy-break feedback without surveillance.

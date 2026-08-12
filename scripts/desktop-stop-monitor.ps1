@@ -16,4 +16,4 @@ foreach ($ownerPid in $portOwners) {
     }
 }
 Add-Type -AssemblyName System.Windows.Forms
-[System.Windows.Forms.MessageBox]::Show("Daily task monitor has been stopped.", "Daily Task Monitor") | Out-Null
+[System.Windows.Forms.MessageBox]::Show("Orbit has been stopped.", "Orbit") | Out-Null

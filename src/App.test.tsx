@@ -216,6 +216,15 @@ function installPreviewWindow() {
   return installed;
 }
 
+function installMacDesktopWindow() {
+  const installed = installDesktopWindow();
+  vi.stubGlobal("navigator", {
+    ...installed.window.navigator,
+    userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+  });
+  return installed;
+}
+
 function desktopCommandResult(command: string) {
   if (command === "get_settings") return { ...appSettings, aiAutomationNoticeVersion: 1 };
   if (command === "get_ai_connection_health" || command === "refresh_ai_connection_health") return aiConnectionHealth();
@@ -313,8 +322,33 @@ describe("App", () => {
   it("keeps operational details behind the settings action", () => {
     const html = renderToStaticMarkup(<App initialSegments={segments} />);
 
+    expect(html).toContain("<h1>Orbit</h1>");
+    expect(html).not.toContain("每日任务监测系统");
     expect(html).toContain("aria-label=\"打开设置\"");
     expect(html).not.toContain("高级与校准</h2>");
+  });
+
+  it("opens settings from the native macOS menu event", async () => {
+    const { document } = installMacDesktopWindow();
+    let openSettings: (() => void) | undefined;
+    vi.mocked(listen).mockImplementation(async (event, handler) => {
+      if (event === "open-settings") openSettings = handler as () => void;
+      return () => undefined;
+    });
+    vi.mocked(invoke).mockImplementation(async (command) => desktopCommandResult(command));
+    const rootElement = document.getElementById("root") as unknown as HTMLDivElement;
+    const root = createRoot(rootElement);
+
+    try {
+      await act(async () => root.render(<App initialSegments={segments} />));
+      expect(rootElement.querySelector('button[aria-label="打开设置"]')).toBeNull();
+      await act(async () => openSettings?.());
+
+      expect(openSettings).toBeTypeOf("function");
+      expect(rootElement.querySelector('[role="dialog"][aria-label="设置"]')).not.toBeNull();
+    } finally {
+      await act(async () => root.unmount());
+    }
   });
 
   it("renders the classic theme, stable analysis order, and compact visual summaries", () => {

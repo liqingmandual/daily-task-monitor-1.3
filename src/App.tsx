@@ -72,6 +72,7 @@ import {
   listenActivityChanged,
   listenAiConnectionHealthChanged,
   listenCollectionHealthChanged,
+  listenOpenSettings,
   listenDailyAnalysisChanged,
   listenWorkflowChanged,
   loadDashboardSnapshot,
@@ -110,6 +111,7 @@ import {
   updatePrivacyExclusions,
   updateKnowledgeGraphExperiment,
   updateUiTheme,
+  usesNativeMacSettingsMenu,
 } from "./lib/desktop";
 import type { KnowledgeGraphNode } from "./lib/desktop";
 
@@ -145,7 +147,7 @@ function normalizeStoredTheme(value: string | null): UiTheme {
 
 const sampleSegments: Segment[] = [
   makeSegment("1", 7.7, 8.15, "research", "Chrome", "AI vocabulary research"),
-  makeSegment("2", 8.15, 9.35, "creation_development", "Codex", "Daily Task Monitor desktop rewrite"),
+  makeSegment("2", 8.15, 9.35, "creation_development", "Codex", "Orbit desktop rewrite"),
   makeSegment("3", 9.35, 9.6, "social", "WeChat", "微信"),
   makeSegment("4", 9.6, 10.35, "text_input", "Obsidian", "English grammar notes"),
   makeSegment("5", 10.35, 11.25, "video_input", "Chrome", "Lecture: Memory and Learning", "learning"),
@@ -362,6 +364,7 @@ function aiHealthPresentation(health: AiConnectionHealth | null, desktopRuntime:
 }
 
 export default function App({ initialSegments }: { initialSegments?: Segment[] }) {
+  const showInlineSettingsButton = !usesNativeMacSettingsMenu();
   const [headerLayout, setHeaderLayout] = useState<HeaderLayout>(() => (
     typeof window === "undefined" ? "wide" : resolveHeaderLayout(window.innerWidth)
   ));
@@ -1081,6 +1084,22 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
   };
 
   useEffect(() => {
+    if (!isDesktopRuntime()) return;
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    void listenOpenSettings(() => {
+      if (active) setSettingsOpen(true);
+    }).then((stopListening) => {
+      if (active) unlisten = stopListening;
+      else stopListening();
+    }).catch(() => undefined);
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
     if (!settingsOpen || !isDesktopRuntime()) return;
     void Promise.all([listAiProviders(), listBrowserSources(), getAppSettings(), getCodexHealth()]).then(([nextProviders, nextSources, nextSettings, nextCodexHealth]) => {
       setProviders(nextProviders);
@@ -1348,7 +1367,7 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
           <div className="brand-mark"><Gauge size={22} strokeWidth={2.2} /></div>
           <div>
             <span>LOCAL WORK CONSOLE</span>
-            <h1>每日任务监测系统</h1>
+            <h1>Orbit</h1>
           </div>
         </div>
         <nav className="main-tabs" aria-label="主导航">
@@ -1381,7 +1400,7 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
             {focusOpen && <CompactFocusPopover goal={dailyGoal.goals} minutes={focusMinutes} running={focusRunning} taskId={focusTaskId} tasks={dailyLedger?.tasks ?? []} canStart={selectedDate === new Date().toLocaleDateString("sv-SE")} onTaskChange={setFocusTaskId} onMinutesChange={setFocusMinutes} onToggle={() => void toggleFocus()} />}
           </div>
           <button className="icon-button" aria-label="刷新数据" onClick={() => void refreshDashboard()}><RefreshCw size={18} /></button>
-          <button ref={settingsButtonRef} className="icon-button" aria-label="打开设置" onClick={() => setSettingsOpen(true)}><Settings size={19} /></button>
+          {showInlineSettingsButton && <button ref={settingsButtonRef} className="icon-button" aria-label="打开设置" onClick={() => setSettingsOpen(true)}><Settings size={19} /></button>}
         </div>
       </header>
 

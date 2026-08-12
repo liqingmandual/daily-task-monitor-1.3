@@ -29,6 +29,7 @@ import {
   listenAiConnectionHealthChanged,
   listenActivityChanged,
   listenCollectionHealthChanged,
+  listenOpenSettings,
   testCodexCli,
   loadTrendAnalysis,
   loadTrendRange,
@@ -90,6 +91,16 @@ describe("desktop bridge", () => {
     const eventHandler = vi.mocked(listen).mock.calls[0][1];
     eventHandler({ payload: undefined } as never);
     expect(onChanged).toHaveBeenCalledOnce();
+  });
+
+  it("listens for the native settings menu event", async () => {
+    const stop = vi.fn();
+    const onOpen = vi.fn();
+    vi.mocked(listen).mockResolvedValueOnce(stop);
+
+    await expect(listenOpenSettings(onOpen)).resolves.toBe(stop);
+
+    expect(listen).toHaveBeenCalledWith("open-settings", onOpen);
   });
 
   it("accepts an inclusive 366-day trend range", () => {

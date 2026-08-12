@@ -10,6 +10,8 @@ use keyring::Entry;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::menu::MenuBuilder;
+#[cfg(target_os = "macos")]
+use tauri::menu::{Menu, MenuItem, MenuItemKind, PredefinedMenuItem};
 use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager, State};
 use url::Url;
@@ -110,6 +112,7 @@ pub const WORKFLOW_CHANGED_EVENT: &str = "workflow-changed";
 pub const ANALYSIS_CHANGED_EVENT: &str = "analysis-changed";
 pub const ACTIVITY_CHANGED_EVENT: &str = "activity-changed";
 pub const COLLECTION_HEALTH_CHANGED_EVENT: &str = "collection-health-changed";
+pub const OPEN_SETTINGS_EVENT: &str = "open-settings";
 const AI_CONNECTION_HEALTH_INTERVAL: Duration = Duration::from_secs(10);
 const API_HEALTH_TIMEOUT: Duration = Duration::from_secs(8);
 const CODEX_HEALTH_TIMEOUT_MS: u64 = 5_000;
@@ -2890,9 +2893,39 @@ fn show_main_dashboard(app: &tauri::AppHandle) {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn install_macos_app_menu(app: &mut tauri::App) -> tauri::Result<()> {
+    let menu = Menu::default(app.handle())?;
+    let settings = MenuItem::with_id(
+        app,
+        "open-settings",
+        "Settings…",
+        true,
+        Some("CmdOrCtrl+,"),
+    )?;
+    let separator = PredefinedMenuItem::separator(app)?;
+    if let Some(MenuItemKind::Submenu(app_menu)) = menu.items()?.into_iter().next() {
+        if let Some(MenuItemKind::Predefined(about)) = app_menu.items()?.into_iter().next() {
+            about.set_text("About Orbit")?;
+        }
+        app_menu.insert_items(&[&settings, &separator], 2)?;
+    }
+    app.set_menu(menu)?;
+    app.on_menu_event(|app, event| {
+        if event.id().as_ref() == "open-settings" {
+            show_main_dashboard(app);
+            let _ = app.emit(OPEN_SETTINGS_EVENT, ());
+        }
+    });
+    Ok(())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            install_macos_app_menu(app)?;
+
             let data_dir = app_data_dir();
             fs::create_dir_all(&data_dir)?;
             backup_database_before_1_3_migration(&data_dir)?;
@@ -2921,7 +2954,7 @@ pub fn run() {
                 .build()?;
             let mut tray = TrayIconBuilder::new()
                 .menu(&menu)
-                .tooltip("每日任务监测系统");
+                .tooltip("Orbit");
             if let Some(icon) = app.default_window_icon() {
                 tray = tray.icon(icon.clone());
             }
@@ -3027,7 +3060,7 @@ pub fn run() {
             record_daily_actual_output_progress,
         ])
         .run(tauri::generate_context!())
-        .expect("failed to run Daily Task Monitor");
+        .expect("failed to run Orbit");
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]

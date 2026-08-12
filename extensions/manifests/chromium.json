@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Daily Task Monitor Watcher",
+  "name": "Orbit Watcher",
   "version": "1.0.0",
-  "description": "Reports active public web pages to Daily Task Monitor on this computer.",
+  "description": "Reports active public web pages to Orbit on this computer.",
   "permissions": ["alarms", "storage", "tabs"],
   "host_permissions": ["http://127.0.0.1/*"],
   "background": { "service_worker": "background.js" },

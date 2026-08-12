@@ -2,7 +2,7 @@
 
 ## Product boundary
 
-Daily Task Monitor is a local-first desktop activity tracker. The authoritative
+Orbit is a local-first desktop activity tracker. The authoritative
 pipeline is:
 
 `platform collector -> MonitorSample -> MonitorEngine -> SQLite -> analysis/UI`

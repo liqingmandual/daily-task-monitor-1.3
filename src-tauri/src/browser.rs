@@ -241,7 +241,7 @@ pub async fn fetch_public_html_summary(
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
             .redirect(reqwest::redirect::Policy::none())
-            .user_agent("DailyTaskMonitor/0.1 (+local public-page summary)")
+            .user_agent("Orbit/1.3 (+local public-page summary)")
             .resolve(host, address)
             .build()?;
         let mut response = client.get(current.clone()).send().await?;
