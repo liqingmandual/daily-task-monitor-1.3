@@ -143,6 +143,11 @@ export interface AiConnectionHealth {
 
 export const AI_CONNECTION_HEALTH_CHANGED_EVENT = "ai-connection-health-changed";
 export const WORKFLOW_CHANGED_EVENT = "workflow-changed";
+export const ACTIVITY_CHANGED_EVENT = "activity-changed";
+
+export interface ActivityChangedEvent {
+  observedAtMs: number;
+}
 
 export type AiExecutionErrorKind = "provider" | "codex" | "invalid-job" | "invalid-response" | "persistence" | "unknown";
 export type AiJobStatus = "pending" | "running" | "complete" | "awaiting-reassignment";
@@ -1364,6 +1369,14 @@ export async function listenWorkflowChanged(
   handler: (event: { jobId?: string; status: string }) => void,
 ): Promise<UnlistenFn> {
   return listen<{ jobId?: string; status: string }>(WORKFLOW_CHANGED_EVENT, (event) => {
+    handler(event.payload);
+  });
+}
+
+export async function listenActivityChanged(
+  handler: (event: ActivityChangedEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<ActivityChangedEvent>(ACTIVITY_CHANGED_EVENT, (event) => {
     handler(event.payload);
   });
 }

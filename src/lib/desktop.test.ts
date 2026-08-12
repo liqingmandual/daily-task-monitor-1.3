@@ -26,6 +26,7 @@ import {
   saveDailyGoal,
   refreshAiConnectionHealth,
   listenAiConnectionHealthChanged,
+  listenActivityChanged,
   testCodexCli,
   loadTrendAnalysis,
   loadTrendRange,
@@ -213,6 +214,22 @@ describe("desktop bridge", () => {
     emit(payload);
 
     expect(received).toEqual([payload]);
+  });
+
+  it("forwards activity-changed timestamps", async () => {
+    const received: unknown[] = [];
+    let emit: (payload: unknown) => void = () => undefined;
+    vi.mocked(listen).mockImplementation(async (event, handler) => {
+      expect(event).toBe("activity-changed");
+      const callback = handler as (event: { payload: unknown }) => void;
+      emit = (payload) => callback({ payload });
+      return () => undefined;
+    });
+
+    await listenActivityChanged((event) => received.push(event));
+    emit({ observedAtMs: 1_786_521_600_000 });
+
+    expect(received).toEqual([{ observedAtMs: 1_786_521_600_000 }]);
   });
 
   it("preserves an explicitly selected video purpose in manual classification", async () => {

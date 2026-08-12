@@ -104,6 +104,7 @@ use crate::work_ledger::{
 pub const AI_CONNECTION_HEALTH_CHANGED_EVENT: &str = "ai-connection-health-changed";
 pub const WORKFLOW_CHANGED_EVENT: &str = "workflow-changed";
 pub const ANALYSIS_CHANGED_EVENT: &str = "analysis-changed";
+pub const ACTIVITY_CHANGED_EVENT: &str = "activity-changed";
 const AI_CONNECTION_HEALTH_INTERVAL: Duration = Duration::from_secs(10);
 const API_HEALTH_TIMEOUT: Duration = Duration::from_secs(8);
 const CODEX_HEALTH_TIMEOUT_MS: u64 = 5_000;
@@ -3013,6 +3014,12 @@ fn start_monitoring_worker(app: tauri::AppHandle) {
                             },
                         );
                         if persisted.is_ok() {
+                            let _ = app.emit(
+                                ACTIVITY_CHANGED_EVENT,
+                                serde_json::json!({
+                                    "observedAtMs": sample.observed_at_ms,
+                                }),
+                            );
                             for segment in output.completed {
                                 if background_ai_gate_enabled(
                                     &settings,
@@ -3062,9 +3069,17 @@ fn start_monitoring_worker(app: tauri::AppHandle) {
                 let segment = engine.take_current();
                 if let Some(state) = app.try_state::<DesktopState>() {
                     if let Ok(service) = state.service.lock() {
-                        let _ = service
+                        let persisted = service
                             .database()
                             .record_monitoring_pause(segment.as_ref(), &checkpoint);
+                        if persisted.is_ok() {
+                            let _ = app.emit(
+                                ACTIVITY_CHANGED_EVENT,
+                                serde_json::json!({
+                                    "observedAtMs": observed_at_ms,
+                                }),
+                            );
+                        }
                     }
                 }
             }

@@ -68,6 +68,7 @@ import {
   listAiProviders,
   listAiReviews,
   listBrowserSources,
+  listenActivityChanged,
   listenAiConnectionHealthChanged,
   listenDailyAnalysisChanged,
   listenWorkflowChanged,
@@ -187,6 +188,8 @@ function formatDuration(seconds: number): string {
 function monitoredShare(seconds: number, monitoredSeconds: number): string {
   return monitoredSeconds > 0 ? `${(seconds / monitoredSeconds * 100).toFixed(1)}%` : "—";
 }
+
+const DASHBOARD_SYNC_INTERVAL_MS = 60_000;
 
 function MetricCard({ label, value, note, accent, onActivate }: { label: string; value: string; note: string; accent: string; onActivate?: () => void }) {
   const content = <>
@@ -388,6 +391,7 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
   const themeSelectionVersionRef = useRef(0);
   const aiReviewMarkersMountedRef = useRef(false);
   const aiReviewMarkersRequestRef = useRef(0);
+  const dashboardRequestRef = useRef(0);
   const dailyAutoQueueRef = useRef(new Map<string, DailyAnalysisQueueCheckpoint>());
   const metrics = useMemo(() => buildDashboardMetrics(segments), [segments]);
   const activityCompositions = useMemo(
@@ -682,10 +686,12 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
     }
   };
 
-  const refreshDashboard = async () => {
-    if (!isDesktopRuntime()) return;
+  const refreshDashboard = async (): Promise<number | null> => {
+    if (!isDesktopRuntime()) return null;
+    const requestId = ++dashboardRequestRef.current;
     try {
       const dashboard = await loadDashboardSnapshot(selectedDate);
+      if (requestId !== dashboardRequestRef.current) return null;
       const { startMs, endMs } = dayBounds(selectedDate);
       const nextSegments = toUiSegments(dashboard.timeline, startMs, endMs);
       setSegments(nextSegments);
@@ -694,16 +700,27 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
       );
       setDailyWorkLedgerRollup(dashboard.workLedger);
       try {
-        setAppIdentities(await resolveAppIdentities(nextSegments));
+        const nextAppIdentities = await resolveAppIdentities(nextSegments);
+        if (requestId === dashboardRequestRef.current) {
+          setAppIdentities(nextAppIdentities);
+        }
       } catch {
-        setAppIdentities(new Map(nextSegments.map((segment) => {
-          const path = segment.appPath ?? "";
-          return [appIdentityKey(segment.app, path), fallbackAppIdentity(segment.app, path)];
-        })));
+        if (requestId === dashboardRequestRef.current) {
+          setAppIdentities(new Map(nextSegments.map((segment) => {
+            const path = segment.appPath ?? "";
+            return [appIdentityKey(segment.app, path), fallbackAppIdentity(segment.app, path)];
+          })));
+        }
       }
-      setDesktopMessage("SQLite 数据已同步");
+      if (requestId === dashboardRequestRef.current) {
+        setDesktopMessage("SQLite 数据已同步");
+      }
+      return nextSegments.length;
     } catch (error) {
-      setDesktopMessage(`读取失败：${String(error)}`);
+      if (requestId === dashboardRequestRef.current) {
+        setDesktopMessage(`读取失败：${String(error)}`);
+      }
+      return null;
     }
   };
 
@@ -729,7 +746,76 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
   }, []);
 
   useEffect(() => {
-    void refreshDashboard();
+    if (!isDesktopRuntime()) return;
+    const today = new Date().toLocaleDateString("sv-SE");
+    const { startMs, endMs } = dayBounds(selectedDate);
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    let emptyRetryTimer: ReturnType<typeof setTimeout> | undefined;
+    let activityRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+    let dashboardSyncTimer: ReturnType<typeof setInterval> | undefined;
+    let lastActivityRefreshAt = Date.now();
+
+    const refreshCurrentDay = () => {
+      if (!active || selectedDate !== today || document.visibilityState === "hidden") return;
+      if (emptyRetryTimer) {
+        clearTimeout(emptyRetryTimer);
+        emptyRetryTimer = undefined;
+      }
+      if (activityRefreshTimer) {
+        clearTimeout(activityRefreshTimer);
+        activityRefreshTimer = undefined;
+      }
+      lastActivityRefreshAt = Date.now();
+      void refreshDashboard();
+    };
+
+    const refreshWhenVisible = () => {
+      if (document.visibilityState !== "hidden") refreshCurrentDay();
+    };
+
+    void refreshDashboard().then((segmentCount) => {
+      if (!active || segmentCount !== 0 || selectedDate !== today) return;
+      emptyRetryTimer = setTimeout(() => {
+        emptyRetryTimer = undefined;
+        if (active) void refreshDashboard();
+      }, DASHBOARD_SYNC_INTERVAL_MS);
+    });
+
+    void listenActivityChanged((event) => {
+      if (!active || event.observedAtMs < startMs || event.observedAtMs >= endMs) return;
+      if (emptyRetryTimer) {
+        clearTimeout(emptyRetryTimer);
+        emptyRetryTimer = undefined;
+      }
+      if (activityRefreshTimer) return;
+      const elapsed = Date.now() - lastActivityRefreshAt;
+      const delay = Math.max(500, DASHBOARD_SYNC_INTERVAL_MS - elapsed);
+      activityRefreshTimer = setTimeout(() => {
+        activityRefreshTimer = undefined;
+        lastActivityRefreshAt = Date.now();
+        if (active) void refreshDashboard();
+      }, delay);
+    }).then((stopListening) => {
+      if (active) unlisten = stopListening;
+      else stopListening();
+    }).catch(() => undefined);
+
+    if (selectedDate === today) {
+      dashboardSyncTimer = setInterval(refreshCurrentDay, DASHBOARD_SYNC_INTERVAL_MS);
+      window.addEventListener("focus", refreshCurrentDay);
+      document.addEventListener("visibilitychange", refreshWhenVisible);
+    }
+
+    return () => {
+      active = false;
+      if (emptyRetryTimer) clearTimeout(emptyRetryTimer);
+      if (activityRefreshTimer) clearTimeout(activityRefreshTimer);
+      if (dashboardSyncTimer) clearInterval(dashboardSyncTimer);
+      window.removeEventListener("focus", refreshCurrentDay);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+      unlisten?.();
+    };
   }, [selectedDate]);
 
   useEffect(() => {
