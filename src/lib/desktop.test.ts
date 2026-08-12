@@ -47,6 +47,7 @@ import {
   queueTrendResearchAnalysis,
   updateSettings,
   updateKnowledgeGraphExperiment,
+  updateUiFont,
   updateUiTheme,
   type AppSettings,
   type AiConnectionHealth,
@@ -184,6 +185,14 @@ describe("desktop bridge", () => {
     });
   });
 
+  it("persists the UI font through the settings patch", async () => {
+    await updateUiFont("Inter");
+
+    expect(invoke).toHaveBeenCalledWith("update_settings", {
+      patch: { uiFont: "Inter" },
+    });
+  });
+
   it("persists the experimental knowledge graph switch", async () => {
     await updateKnowledgeGraphExperiment(true);
 
@@ -309,6 +318,7 @@ describe("desktop bridge", () => {
       excludedApps: [],
       excludedDomains: [],
       uiTheme: "classic-workbench",
+      uiFont: "Ubuntu",
       experimentalKnowledgeGraphEnabled: false,
     } satisfies AppSettings;
     vi.mocked(invoke).mockResolvedValueOnce(settings);

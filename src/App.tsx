@@ -2,18 +2,22 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import {
   Activity,
   Bot,
+  CalendarDays,
   ChevronRight,
   CircleCheck,
   CircleX,
+  ClipboardCheck,
   FileText,
   Focus,
   Gauge,
+  ListChecks,
   Network,
   RefreshCw,
   Settings,
   ShieldAlert,
   ShieldCheck,
   Sparkles,
+  ChartNoAxesCombined,
   Timer,
   TriangleAlert,
   X,
@@ -69,6 +73,7 @@ import {
   listAiProviders,
   listAiReviews,
   listBrowserSources,
+  listSystemFonts,
   listenActivityChanged,
   listenAiConnectionHealthChanged,
   listenCollectionHealthChanged,
@@ -99,6 +104,7 @@ import {
   type CollectionHealth,
   type DailyGoalRecord,
   type ScopedDailyAnalysisResult,
+  type UiFont,
   type UiTheme,
   type WorkLedgerEvidence,
   type WorkLedgerRangeRollup,
@@ -110,6 +116,7 @@ import {
   updateMonitoring,
   updatePrivacyExclusions,
   updateKnowledgeGraphExperiment,
+  updateUiFont,
   updateUiTheme,
   usesNativeMacSettingsMenu,
 } from "./lib/desktop";
@@ -120,6 +127,14 @@ const KnowledgeGraphPage = lazy(() => import("./KnowledgeGraphPage"));
 type Tab = "today" | "trends" | "workflow" | "ai-review" | "health";
 type HeaderLayout = "mobile" | "compact" | "wide";
 
+const tabOptions: Array<{ id: Tab; label: string; icon: typeof CalendarDays }> = [
+  { id: "today", label: "今日", icon: CalendarDays },
+  { id: "trends", label: "趋势", icon: ChartNoAxesCombined },
+  { id: "workflow", label: "工作流", icon: ListChecks },
+  { id: "ai-review", label: "AI 审核", icon: ClipboardCheck },
+  { id: "health", label: "健康诊断", icon: Activity },
+];
+
 function resolveHeaderLayout(viewportWidth: number): HeaderLayout {
   if (viewportWidth <= 760) return "mobile";
   if (viewportWidth <= 1500) return "compact";
@@ -127,12 +142,34 @@ function resolveHeaderLayout(viewportWidth: number): HeaderLayout {
 }
 
 const themeOptions: Array<{ id: UiTheme; name: string; note: string }> = [
+  { id: "moss-nocturne", name: "暮野观测", note: "暖黑苔绿与柔和琥珀数据光" },
   { id: "classic-workbench", name: "经典工作台", note: "清晰、克制，接近旧版体验" },
   { id: "moon-glass", name: "月白玻璃", note: "冰蓝玻璃与柔和高光" },
   { id: "soft-paper", name: "柔彩纸张", note: "低饱和色块与编辑式层级" },
   { id: "blueprint-data", name: "清透蓝图", note: "精细技术线条与数据动效" },
   { id: "knowledge-space", name: "知识空间", note: "深色关系控制台与高密度图谱" },
 ];
+
+function normalizeStoredFont(value: string | null): UiFont {
+  const normalized = value ? normalizeFontFamilyName(value) : "";
+  return normalized && isUsableFontFamily(normalized) ? normalized : "Ubuntu";
+}
+
+function normalizeFontFamilyName(value: string): string {
+  return value.trim().replace(/\.(?:ttf|tff|otf|ttc|dfont)$/i, "").trim();
+}
+
+function isUsableFontFamily(value: string): boolean {
+  const normalized = value.trim();
+  return normalized.length > 0
+    && normalized.length <= 120
+    && !normalized.startsWith(".")
+    && !/[\u0000-\u001f\u007f]/.test(normalized);
+}
+
+function cssFontFamily(value: string): string {
+  return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+}
 
 function normalizeStoredTheme(value: string | null): UiTheme {
   const legacyMap: Record<string, UiTheme> = {
@@ -416,10 +453,15 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
     if (typeof window === "undefined") return "classic-workbench";
     return normalizeStoredTheme(window.localStorage.getItem("daily-task-monitor-ui-theme"));
   });
+  const [uiFont, setUiFont] = useState<UiFont>(() => {
+    if (typeof window === "undefined") return "Ubuntu";
+    return normalizeStoredFont(window.localStorage.getItem("daily-task-monitor-ui-font"));
+  });
   const [experimentalKnowledgeGraphEnabled, setExperimentalKnowledgeGraphEnabled] = useState(() => {
     if (typeof window === "undefined") return false;
     return window.localStorage.getItem("daily-task-monitor-knowledge-graph") === "true";
   });
+  const [systemFonts, setSystemFonts] = useState<string[]>(["Ubuntu"]);
   const [focusMinutes, setFocusMinutes] = useState(45);
   const [focusRunning, setFocusRunning] = useState(false);
   const [focusSessionId, setFocusSessionId] = useState<string | null>(null);
@@ -631,6 +673,21 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
     }
   };
 
+  const chooseFont = async (font: UiFont) => {
+    const previousFont = uiFont;
+    setUiFont(font);
+    window.localStorage.setItem("daily-task-monitor-ui-font", font);
+    if (!isDesktopRuntime()) return;
+    try {
+      await updateUiFont(font);
+      setSettingsMessage("界面字体已保存");
+    } catch (error) {
+      setUiFont(previousFont);
+      window.localStorage.setItem("daily-task-monitor-ui-font", previousFont);
+      setSettingsMessage(`字体保存失败：${String(error)}`);
+    }
+  };
+
   const chooseIdleThreshold = async (minutes: number) => {
     const previousMinutes = idleThresholdMinutes;
     const selectionVersion = ++idleThresholdSelectionVersionRef.current;
@@ -661,10 +718,28 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
 
   useEffect(() => {
     if (!isDesktopRuntime()) return;
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    void listenOpenSettings(() => {
+      if (active) setSettingsOpen(true);
+    }).then((stopListening) => {
+      if (active) unlisten = stopListening;
+      else stopListening();
+    }).catch(() => undefined);
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isDesktopRuntime()) return;
     const requestVersion = themeSelectionVersionRef.current;
     void getAppSettings().then((nextSettings) => {
       if (requestVersion !== themeSelectionVersionRef.current) return;
       setExperimentalKnowledgeGraphEnabled(nextSettings.experimentalKnowledgeGraphEnabled);
+      setUiFont(nextSettings.uiFont || "Ubuntu");
+      window.localStorage.setItem("daily-task-monitor-ui-font", nextSettings.uiFont || "Ubuntu");
       setIdleThresholdMinutes(nextSettings.idleThresholdMinutes);
       setAiExecutionMode(nextSettings.aiExecutionMode ?? "api-key");
       setSelectedApiProviderId(nextSettings.selectedApiProviderId ?? null);
@@ -711,6 +786,14 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
       (previouslyFocused ?? settingsButtonRef.current)?.focus();
     };
   }, [settingsOpen]);
+
+  useEffect(() => {
+    if (!isDesktopRuntime()) return;
+    void listSystemFonts().then((fonts) => {
+      const normalizedFonts = fonts.map(normalizeFontFamilyName).filter(isUsableFontFamily);
+      setSystemFonts(Array.from(new Set(["Ubuntu", ...normalizedFonts])).sort((left, right) => left.localeCompare(right)));
+    }).catch((error) => setSettingsMessage(`字体列表读取失败：${String(error)}`));
+  }, []);
 
   useEffect(() => {
     if (!settingsOpen || aiSettingsFocusRequest === 0) return;
@@ -1084,22 +1167,6 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
   };
 
   useEffect(() => {
-    if (!isDesktopRuntime()) return;
-    let active = true;
-    let unlisten: (() => void) | undefined;
-    void listenOpenSettings(() => {
-      if (active) setSettingsOpen(true);
-    }).then((stopListening) => {
-      if (active) unlisten = stopListening;
-      else stopListening();
-    }).catch(() => undefined);
-    return () => {
-      active = false;
-      unlisten?.();
-    };
-  }, []);
-
-  useEffect(() => {
     if (!settingsOpen || !isDesktopRuntime()) return;
     void Promise.all([listAiProviders(), listBrowserSources(), getAppSettings(), getCodexHealth()]).then(([nextProviders, nextSources, nextSettings, nextCodexHealth]) => {
       setProviders(nextProviders);
@@ -1121,6 +1188,8 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
       setExcludedApps(nextSettings.excludedApps.join("\n"));
       setExcludedDomains(nextSettings.excludedDomains.join("\n"));
       setExperimentalKnowledgeGraphEnabled(nextSettings.experimentalKnowledgeGraphEnabled);
+      setUiFont(nextSettings.uiFont || "Ubuntu");
+      window.localStorage.setItem("daily-task-monitor-ui-font", nextSettings.uiFont || "Ubuntu");
       if (themeOptions.some((item) => item.id === nextSettings.uiTheme)) {
         setUiTheme(nextSettings.uiTheme);
         window.localStorage.setItem("daily-task-monitor-ui-theme", nextSettings.uiTheme);
@@ -1361,21 +1430,25 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
   }
 
   return (
-    <div ref={setAppFrame} className="app-frame" data-theme={uiTheme} data-header-layout={headerLayout} data-scroll-container="dashboard">
+    <div ref={setAppFrame} className="app-frame" data-theme={uiTheme} data-header-layout={headerLayout} data-scroll-container="dashboard" style={{ "--font-selected": cssFontFamily(uiFont) } as React.CSSProperties}>
       <header ref={headerRef} className="app-header">
         <div className="brand-lockup">
           <div className="brand-mark"><Gauge size={22} strokeWidth={2.2} /></div>
           <div>
-            <span>LOCAL WORK CONSOLE</span>
+            <span>ORBIT</span>
             <h1>Orbit</h1>
           </div>
         </div>
         <nav className="main-tabs" aria-label="主导航">
-          {(["today", "trends", "workflow", "ai-review", "health"] as Tab[]).map((item) => (
-            <button key={item} className={tab === item ? "active" : ""} onClick={() => { if (item === "ai-review") setAiReviewSubjectId(null); setTab(item); }}>
-              {item === "today" ? "今日" : item === "trends" ? "趋势" : item === "workflow" ? "工作流" : item === "ai-review" ? "AI 审核" : "健康诊断"}
-            </button>
-          ))}
+          {tabOptions.map((item) => {
+            const TabIcon = item.icon;
+            return (
+              <button key={item.id} className={tab === item.id ? "active" : ""} aria-current={tab === item.id ? "page" : undefined} onClick={() => { if (item.id === "ai-review") setAiReviewSubjectId(null); setTab(item.id); }}>
+                <TabIcon size={15} strokeWidth={2} aria-hidden="true" />
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
         </nav>
         <div className="header-actions">
           <div className={`status-chip ${monitoring ? "online" : "paused"}`}>
@@ -1408,7 +1481,7 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
         {tab === "today" && (
           <>
             <section className="page-heading">
-              <div><span>TODAY</span><h2>今天的时间结构</h2></div>
+              <div><span>TODAY</span></div>
               <p>总监测 {formatDuration(metrics.monitoredSeconds)} · 分类覆盖率 {classificationCoverage}% · 待复核/补算 {pendingSegments.length} 项{dailyWorkLedgerRollup ? ` · 台账任务 ${dailyWorkLedgerRollup.tasks.length}` : ""} · {desktopMessage}</p>
             </section>
 
@@ -1535,6 +1608,14 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
                   <b>{theme.name}</b><small>{theme.note}</small>
                 </button>)}
               </div>
+            </SettingsSection>
+            <SettingsSection icon={<FileText size={18} />} title="界面字体">
+              <label className="font-select-row">
+                <span><b>字体</b><small>桌面端列出操作系统中已安装的字体；等宽内容仍使用 Ubuntu Mono。</small></span>
+                <select aria-label="选择界面字体" value={uiFont} onChange={(event) => void chooseFont(event.target.value)}>
+                  {Array.from(new Set([uiFont, ...systemFonts])).map((font) => <option key={font} value={font}>{font}</option>)}
+                </select>
+              </label>
             </SettingsSection>
             <SettingsSection icon={<Network size={18} />} title="实验功能">
               <div className="setting-row"><span><b>知识空间</b><small>用最近 30 天真实活动构建本地三维关系图谱</small></span><button className={experimentalKnowledgeGraphEnabled ? "toggle on" : "toggle"} aria-label="启用知识空间实验" aria-pressed={experimentalKnowledgeGraphEnabled} onClick={() => void toggleKnowledgeGraphExperiment()}><i /></button></div>

@@ -376,7 +376,7 @@ describe("App", () => {
     expect(appsIndex).toBeLessThan(timeIndex);
   });
 
-  it("composes Today in the approved heading-to-analysis order", () => {
+  it("composes Today with explanatory analysis before the detailed timeline", () => {
     const html = renderToStaticMarkup(<App initialSegments={segments} />);
 
     expect(html).toContain('data-analysis-layout="three-column"');

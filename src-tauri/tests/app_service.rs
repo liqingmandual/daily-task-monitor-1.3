@@ -688,6 +688,7 @@ fn settings_patch_preserves_unspecified_values() {
             excluded_apps: None,
             excluded_domains: None,
             ui_theme: None,
+            ui_font: None,
             experimental_knowledge_graph_enabled: None,
         })
         .unwrap();
@@ -842,6 +843,7 @@ fn ui_theme_defaults_to_classic_workbench() {
 fn allowed_ui_theme_patches_are_persisted() {
     let service = AppService::new(Database::open_in_memory().unwrap());
     for (theme, serialized) in [
+        (UiTheme::MossNocturne, "moss-nocturne"),
         (UiTheme::ClassicWorkbench, "classic-workbench"),
         (UiTheme::MoonGlass, "moon-glass"),
         (UiTheme::SoftPaper, "soft-paper"),

@@ -3,10 +3,8 @@ import * as echarts from "echarts/core";
 import { PieChart } from "echarts/charts";
 import { TooltipComponent } from "echarts/components";
 import { SVGRenderer } from "echarts/renderers";
-import { AppWindow } from "lucide-react";
-import { FaEdge } from "react-icons/fa6";
-import { SiGooglechrome, SiObsidian, SiQq, SiWechat } from "react-icons/si";
-import { VscCode } from "react-icons/vsc";
+import { AppIcon } from "../AppIcon";
+import { fallbackAppIdentity } from "../../lib/app-identity";
 import { formatChartDuration, formatDonutTooltip } from "../../lib/presentation";
 import { categoryMeta } from "./analysis-meta";
 
@@ -203,15 +201,7 @@ export function DonutChart({
 }
 
 export function AppLogo({ name }: { name: string }) {
-  const normalized = name.toLowerCase();
-  const props = { size: 18, "aria-hidden": true };
-  if (normalized.includes("chrome")) return <span className="app-logo chrome" data-app-icon="chrome"><SiGooglechrome {...props} /></span>;
-  if (normalized.includes("edge")) return <span className="app-logo edge" data-app-icon="edge"><FaEdge {...props} /></span>;
-  if (normalized.includes("code") || normalized.includes("codex")) return <span className="app-logo code" data-app-icon="code"><VscCode {...props} /></span>;
-  if (normalized.includes("obsidian")) return <span className="app-logo obsidian" data-app-icon="obsidian"><SiObsidian {...props} /></span>;
-  if (normalized.includes("wechat") || normalized.includes("weixin")) return <span className="app-logo wechat" data-app-icon="wechat"><SiWechat {...props} /></span>;
-  if (normalized === "qq" || normalized.includes("tencentqq")) return <span className="app-logo qq" data-app-icon="qq"><SiQq {...props} /></span>;
-  return <span className="app-logo fallback" data-app-icon="generic"><AppWindow {...props} /></span>;
+  return <AppIcon identity={fallbackAppIdentity(name)} />;
 }
 
 export function formatPreview(item: DonutSelection | null) {

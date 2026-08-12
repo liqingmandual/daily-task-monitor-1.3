@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -725,16 +726,20 @@ fn resolve_app_identities(apps: Vec<AppIdentityRequest>) -> Vec<AppIdentityDto> 
             }
 
             let cached = resolve_executable_identity(&executable_path);
+            let display_name = canonical_display_name(
+                &raw_name,
+                &cached.product_name,
+                &executable_path,
+            );
+            let icon_data_url = cached
+                .icon_data_url
+                .or_else(|| embedded_product_icon_data_url(&executable_path));
             Some(AppIdentityDto {
-                display_name: canonical_display_name(
-                    &raw_name,
-                    &cached.product_name,
-                    &executable_path,
-                ),
+                display_name,
                 raw_name,
                 executable_path,
                 product_name: cached.product_name,
-                icon_data_url: cached.icon_data_url,
+                icon_data_url,
             })
         })
         .collect()
@@ -884,6 +889,16 @@ fn png_data_url(bytes: &[u8]) -> String {
     )
 }
 
+fn embedded_product_icon_data_url(executable_path: &str) -> Option<String> {
+    let current_executable = std::env::current_exe().ok()?;
+    let current_key = normalize_executable_path(current_executable.to_str()?);
+    let requested_key = normalize_executable_path(executable_path);
+    if requested_key.is_empty() || requested_key != current_key {
+        return None;
+    }
+    Some(png_data_url(include_bytes!("../icons/icon.png")))
+}
+
 #[cfg(target_os = "windows")]
 fn extract_executable_icon(executable_path: &str) -> Option<Vec<u8>> {
     if executable_path.is_empty() || !Path::new(executable_path).is_file() {
@@ -908,7 +923,56 @@ fn extract_executable_icon(executable_path: &str) -> Option<Vec<u8>> {
     bytes
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+fn extract_executable_icon(executable_path: &str) -> Option<Vec<u8>> {
+    let executable = Path::new(executable_path);
+    let app_bundle = executable
+        .ancestors()
+        .find(|path| path.extension().is_some_and(|extension| extension == "app"))?;
+    let info_plist = app_bundle.join("Contents/Info.plist");
+    let icon_name = Command::new("/usr/bin/plutil")
+        .args(["-extract", "CFBundleIconFile", "raw", "-o", "-"])
+        .arg(&info_plist)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())?
+        .trim()
+        .to_string();
+    if icon_name.is_empty() || icon_name.starts_with('.') {
+        return None;
+    }
+    let icon_name = if Path::new(&icon_name).extension().is_some() {
+        icon_name
+    } else {
+        format!("{icon_name}.icns")
+    };
+    let icon_path = app_bundle.join("Contents/Resources").join(icon_name);
+    if !icon_path.is_file() {
+        return None;
+    }
+
+    let output_path = std::env::temp_dir().join(format!(
+        "daily-task-monitor-icon-{:x}.png",
+        Sha256::digest(executable_path.as_bytes())
+    ));
+    let converted = Command::new("/usr/bin/sips")
+        .args(["-s", "format", "png"])
+        .arg(&icon_path)
+        .arg("--out")
+        .arg(&output_path)
+        .output()
+        .ok()
+        .is_some_and(|output| output.status.success());
+    let bytes = converted
+        .then(|| fs::read(&output_path).ok())
+        .flatten()
+        .filter(|bytes| is_png(bytes));
+    let _ = fs::remove_file(output_path);
+    bytes
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn extract_executable_icon(_executable_path: &str) -> Option<Vec<u8>> {
     None
 }
@@ -1139,6 +1203,96 @@ fn get_settings(state: State<'_, DesktopState>) -> Result<AppSettings, String> {
     state_service(&state)?
         .get_settings()
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_system_fonts() -> Result<Vec<String>, String> {
+    let output = if cfg!(target_os = "windows") {
+        Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "[Console]::OutputEncoding=[Text.UTF8Encoding]::new(); (Get-Item 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts').Property",
+            ])
+            .output()
+    } else if cfg!(target_os = "macos") {
+        Command::new("system_profiler")
+            .args(["SPFontsDataType", "-json", "-detailLevel", "mini"])
+            .output()
+    } else {
+        Command::new("fc-list").args([":", "family"]).output()
+    }
+    .map_err(|error| format!("无法读取系统字体：{error}"))?;
+    if !output.status.success() {
+        return Err("系统字体枚举命令执行失败".to_string());
+    }
+
+    let raw = String::from_utf8_lossy(&output.stdout);
+    let mut fonts = HashSet::new();
+    if cfg!(target_os = "macos") {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) {
+            collect_font_families(&value, &mut fonts);
+        }
+    } else if cfg!(target_os = "windows") {
+        for line in raw.lines() {
+            insert_font_family(line, &mut fonts);
+        }
+    } else {
+        for family_group in raw.lines() {
+            for family in family_group.split(',') {
+                insert_font_family(family, &mut fonts);
+            }
+        }
+    }
+    fonts.insert("Ubuntu".to_string());
+    let mut fonts = fonts.into_iter().collect::<Vec<_>>();
+    fonts.sort_by_key(|font| font.to_lowercase());
+    Ok(fonts)
+}
+
+fn insert_font_family(value: &str, fonts: &mut HashSet<String>) {
+    let raw_name = value
+        .split(" (")
+        .next()
+        .unwrap_or(value)
+        .trim()
+        .trim_matches('"');
+    let lowercase = raw_name.to_lowercase();
+    let name = [".ttf", ".tff", ".otf", ".ttc", ".dfont"]
+        .iter()
+        .find(|extension| lowercase.ends_with(*extension))
+        .map(|extension| &raw_name[..raw_name.len() - extension.len()])
+        .unwrap_or(raw_name)
+        .trim();
+    if !name.is_empty()
+        && !name.starts_with('.')
+        && name.len() <= 120
+        && !name.chars().any(char::is_control)
+    {
+        fonts.insert(name.to_string());
+    }
+}
+
+fn collect_font_families(value: &serde_json::Value, fonts: &mut HashSet<String>) {
+    match value {
+        serde_json::Value::Object(object) => {
+            for (key, value) in object {
+                if matches!(key.as_str(), "family" | "family_name" | "_name") {
+                    if let Some(name) = value.as_str() {
+                        insert_font_family(name, fonts);
+                    }
+                }
+                collect_font_families(value, fonts);
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                collect_font_families(value, fonts);
+            }
+        }
+        _ => {}
+    }
 }
 
 #[tauri::command]
@@ -3003,6 +3157,7 @@ pub fn run() {
             get_workflow,
             get_knowledge_graph,
             get_settings,
+            list_system_fonts,
             list_ai_reviews,
             list_pending_ai_jobs,
             resolve_ai_review,

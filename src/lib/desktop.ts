@@ -126,6 +126,7 @@ export interface AppSettings {
   excludedApps: string[];
   excludedDomains: string[];
   uiTheme: UiTheme;
+  uiFont: UiFont;
   experimentalKnowledgeGraphEnabled: boolean;
 }
 
@@ -144,6 +145,7 @@ export type SettingsPatch = Partial<Pick<AppSettings,
   | "excludedApps"
   | "excludedDomains"
   | "uiTheme"
+  | "uiFont"
   | "experimentalKnowledgeGraphEnabled"
 >>;
 
@@ -280,7 +282,8 @@ export interface CodexHealth {
   diagnostic: string | null;
 }
 
-export type UiTheme = "classic-workbench" | "moon-glass" | "soft-paper" | "blueprint-data" | "knowledge-space";
+export type UiTheme = "moss-nocturne" | "classic-workbench" | "moon-glass" | "soft-paper" | "blueprint-data" | "knowledge-space";
+export type UiFont = string;
 
 export type KnowledgeGraphNodeKind = "category" | "app" | "domain" | "day" | "activity" | "browser-visit";
 
@@ -1471,6 +1474,14 @@ export async function updatePrivacyExclusions(excludedApps: string[], excludedDo
 
 export async function updateUiTheme(uiTheme: UiTheme): Promise<void> {
   await invoke("update_settings", { patch: { uiTheme } });
+}
+
+export async function updateUiFont(uiFont: UiFont): Promise<void> {
+  await invoke("update_settings", { patch: { uiFont } });
+}
+
+export async function listSystemFonts(): Promise<string[]> {
+  return invoke<string[]>("list_system_fonts");
 }
 
 export async function updateKnowledgeGraphExperiment(experimentalKnowledgeGraphEnabled: boolean): Promise<void> {
