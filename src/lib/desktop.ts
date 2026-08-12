@@ -281,7 +281,7 @@ export interface CodexHealth {
   diagnostic: string | null;
 }
 
-export type UiTheme = "classic-workbench" | "moon-glass" | "soft-paper" | "blueprint-data" | "knowledge-space";
+export type UiTheme = "moss-nocturne" | "classic-workbench" | "moon-glass" | "soft-paper" | "blueprint-data" | "knowledge-space";
 export type UiFont = string;
 
 export type KnowledgeGraphNodeKind = "category" | "app" | "domain" | "day" | "activity" | "browser-visit";

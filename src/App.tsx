@@ -140,6 +140,7 @@ function resolveHeaderLayout(viewportWidth: number): HeaderLayout {
 }
 
 const themeOptions: Array<{ id: UiTheme; name: string; note: string }> = [
+  { id: "moss-nocturne", name: "暮野观测", note: "暖黑苔绿与柔和琥珀数据光" },
   { id: "classic-workbench", name: "经典工作台", note: "清晰、克制，接近旧版体验" },
   { id: "moon-glass", name: "月白玻璃", note: "冰蓝玻璃与柔和高光" },
   { id: "soft-paper", name: "柔彩纸张", note: "低饱和色块与编辑式层级" },
@@ -1415,8 +1416,8 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
         <div className="brand-lockup">
           <div className="brand-mark"><Gauge size={22} strokeWidth={2.2} /></div>
           <div>
-            <span>LOCAL WORK CONSOLE</span>
-            <h1>每日任务监测系统</h1>
+            <span>DAY ATLAS</span>
+            <h1>每日任务监测</h1>
           </div>
         </div>
         <nav className="main-tabs" aria-label="主导航">
@@ -1461,7 +1462,7 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
         {tab === "today" && (
           <>
             <section className="page-heading">
-              <div><span>TODAY</span><h2>今天的时间结构</h2></div>
+              <div><span>TODAY</span></div>
               <p>总监测 {formatDuration(metrics.monitoredSeconds)} · 分类覆盖率 {classificationCoverage}% · 待复核/补算 {pendingSegments.length} 项{dailyWorkLedgerRollup ? ` · 台账任务 ${dailyWorkLedgerRollup.tasks.length}` : ""} · {desktopMessage}</p>
             </section>
 

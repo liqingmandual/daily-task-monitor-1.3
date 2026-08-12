@@ -843,6 +843,7 @@ fn ui_theme_defaults_to_classic_workbench() {
 fn allowed_ui_theme_patches_are_persisted() {
     let service = AppService::new(Database::open_in_memory().unwrap());
     for (theme, serialized) in [
+        (UiTheme::MossNocturne, "moss-nocturne"),
         (UiTheme::ClassicWorkbench, "classic-workbench"),
         (UiTheme::MoonGlass, "moon-glass"),
         (UiTheme::SoftPaper, "soft-paper"),

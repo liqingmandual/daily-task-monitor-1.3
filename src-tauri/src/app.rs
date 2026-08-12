@@ -193,6 +193,7 @@ pub struct AppSettings {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum UiTheme {
+    MossNocturne,
     ClassicWorkbench,
     MoonGlass,
     SoftPaper,
@@ -213,6 +214,7 @@ impl<'de> Deserialize<'de> for UiTheme {
     {
         Ok(
             match serde_json::Value::deserialize(deserializer)?.as_str() {
+                Some("moss-nocturne") => Self::MossNocturne,
                 Some("moon-glass") => Self::MoonGlass,
                 Some("soft-paper" | "studio-blocks") => Self::SoftPaper,
                 Some("blueprint-data" | "signal-console") => Self::BlueprintData,
