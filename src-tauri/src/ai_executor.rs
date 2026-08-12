@@ -193,8 +193,8 @@ pub struct CodexHealth {
 }
 
 fn is_explicit_codex_path(value: &str) -> bool {
-    let path = Path::new(value.trim());
-    path.is_absolute() || path.components().count() > 1
+    let value = value.trim();
+    Path::new(value).is_absolute() || value.contains(['/', '\\'])
 }
 
 fn is_windows_apps_candidate(path: &Path) -> bool {

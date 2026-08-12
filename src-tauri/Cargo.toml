@@ -15,7 +15,6 @@ desktop = [
     "dep:rfd",
     "dep:tauri",
     "dep:tokio",
-    "dep:windows",
 ]
 
 [lib]
@@ -32,7 +31,7 @@ required-features = ["desktop"]
 base64 = { version = "0.22", optional = true }
 chrono = { version = "0.4", default-features = false, features = ["std", "serde", "clock"] }
 directories = { version = "6", optional = true }
-keyring = { version = "3", features = ["windows-native"], optional = true }
+keyring = { version = "3", features = ["apple-native", "windows-native"], optional = true }
 png = { version = "0.17", optional = true }
 rusqlite = { version = "0.40" }
 html5gum = { version = "0.8", default-features = false }
@@ -45,6 +44,7 @@ tauri = { version = "2.11", features = ["tray-icon"], optional = true }
 tokio = { version = "1", features = ["net", "rt-multi-thread", "time"], optional = true }
 url = "2.5"
 zip = { version = "2.4", default-features = false, features = ["deflate"] }
+[target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.62", features = [
     "Media_Control",
     "Win32_Foundation",
@@ -54,7 +54,7 @@ windows = { version = "0.62", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
-], optional = true }
+], optional = false }
 
 [dev-dependencies]
 pretty_assertions = "1"

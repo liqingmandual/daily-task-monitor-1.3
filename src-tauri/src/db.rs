@@ -3300,7 +3300,8 @@ impl Database {
             .into_iter()
             .filter(|executor| {
                 let path = std::path::Path::new(executor);
-                path.components().count() > 1 && !path.is_file()
+                let explicit_path = path.is_absolute() || executor.contains(['/', '\\']);
+                explicit_path && !path.is_file()
             })
             .collect::<Vec<_>>();
         if unavailable.is_empty() {
