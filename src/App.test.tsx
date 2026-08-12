@@ -1469,6 +1469,65 @@ describe("App", () => {
     }
   });
 
+  it("shows the saved idle threshold and rolls back a failed update", async () => {
+    const { document, window } = installDesktopWindow();
+    const settings = {
+      ...appSettings,
+      idleThresholdMinutes: 15,
+      aiAutomationNoticeVersion: 1,
+    };
+    vi.mocked(listen).mockResolvedValue(vi.fn());
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "get_settings") return settings;
+      if (command === "update_settings") {
+        const minutes = (args as { patch: { idleThresholdMinutes?: number } }).patch.idleThresholdMinutes;
+        if (minutes === 6) throw new Error("database unavailable");
+        if (minutes) settings.idleThresholdMinutes = minutes;
+        return { ...settings };
+      }
+      return desktopCommandResult(command);
+    });
+    const rootElement = document.getElementById("root") as unknown as HTMLDivElement;
+    const root = createRoot(rootElement);
+
+    try {
+      await act(async () => root.render(<App initialSegments={segments} />));
+      await act(async () => rootElement.querySelector<HTMLButtonElement>('button[aria-label="打开设置"]')
+        ?.dispatchEvent(new window.Event("click", { bubbles: true })));
+      await act(async () => undefined);
+
+      const threshold = rootElement.querySelector<HTMLSelectElement>('select[aria-label="不活跃阈值"]');
+      expect(threshold?.value).toBe("15");
+      let selectedValue = threshold?.value ?? "";
+      if (threshold) {
+        Object.defineProperty(threshold, "value", {
+          configurable: true,
+          get: () => selectedValue,
+          set: (value: string) => { selectedValue = value; },
+        });
+      }
+
+      await act(async () => {
+        selectedValue = "10";
+        threshold?.dispatchEvent(new window.Event("change", { bubbles: true }));
+      });
+      expect(threshold?.value).toBe("10");
+      expect(invoke).toHaveBeenCalledWith("update_settings", {
+        patch: { idleThresholdMinutes: 10 },
+      });
+
+      await act(async () => {
+        selectedValue = "6";
+        threshold?.dispatchEvent(new window.Event("change", { bubbles: true }));
+      });
+      if (threshold) Reflect.deleteProperty(threshold, "value");
+      expect(threshold?.value).toBe("10");
+      expect(rootElement.textContent).toContain("不活跃阈值保存失败");
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
   it("refreshes unified health after AI mode, provider, custom provider, Codex save, and manual tests", async () => {
     const { document, window } = installDesktopWindow();
     const settings = { ...appSettings, aiExecutionMode: "api-key" as const, aiAutomationNoticeVersion: 1 };

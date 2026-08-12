@@ -329,6 +329,7 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
   const [providers, setProviders] = useState<AiProvider[]>([]);
   const [browserSources, setBrowserSources] = useState<BrowserSource[]>([]);
   const [settingsMessage, setSettingsMessage] = useState("");
+  const [idleThresholdMinutes, setIdleThresholdMinutes] = useState(6);
   const [aiBackfillEnabled, setAiBackfillEnabled] = useState(false);
   const [aiExecutionMode, setAiExecutionMode] = useState<AiExecutionMode>("api-key");
   const [selectedApiProviderId, setSelectedApiProviderId] = useState<string | null>(null);
@@ -389,6 +390,7 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
   const aiNoticeDialogRef = useRef<HTMLElement>(null);
   const aiNoticeReturnFocusRef = useRef<HTMLElement | null>(null);
   const themeSelectionVersionRef = useRef(0);
+  const idleThresholdSelectionVersionRef = useRef(0);
   const aiReviewMarkersMountedRef = useRef(false);
   const aiReviewMarkersRequestRef = useRef(0);
   const dashboardRequestRef = useRef(0);
@@ -567,6 +569,22 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
     }
   };
 
+  const chooseIdleThreshold = async (minutes: number) => {
+    const previousMinutes = idleThresholdMinutes;
+    const selectionVersion = ++idleThresholdSelectionVersionRef.current;
+    setIdleThresholdMinutes(minutes);
+    try {
+      await updateIdleThreshold(minutes);
+      if (selectionVersion === idleThresholdSelectionVersionRef.current) {
+        setSettingsMessage("不活跃阈值已保存");
+      }
+    } catch (error) {
+      if (selectionVersion !== idleThresholdSelectionVersionRef.current) return;
+      setIdleThresholdMinutes(previousMinutes);
+      setSettingsMessage(`不活跃阈值保存失败：${String(error)}`);
+    }
+  };
+
   const handleThemePickerKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
     const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]'));
@@ -585,6 +603,7 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
     void getAppSettings().then((nextSettings) => {
       if (requestVersion !== themeSelectionVersionRef.current) return;
       setExperimentalKnowledgeGraphEnabled(nextSettings.experimentalKnowledgeGraphEnabled);
+      setIdleThresholdMinutes(nextSettings.idleThresholdMinutes);
       setAiExecutionMode(nextSettings.aiExecutionMode ?? "api-key");
       setSelectedApiProviderId(nextSettings.selectedApiProviderId ?? null);
       setAiAutomation({
@@ -1008,6 +1027,7 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
       setProviders(nextProviders);
       setBrowserSources(nextSources);
       setMonitoring(nextSettings.monitoringEnabled);
+      setIdleThresholdMinutes(nextSettings.idleThresholdMinutes);
       setAiBackfillEnabled(nextSettings.aiBackfillEnabled);
       setAiExecutionMode(nextSettings.aiExecutionMode ?? "api-key");
       setSelectedApiProviderId(nextSettings.selectedApiProviderId ?? null);
@@ -1412,7 +1432,7 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
             </SettingsSection>
             <SettingsSection icon={<Activity size={18} />} title="监控与运行状态">
               <div className="setting-row"><span><b>桌面监测</b><small>前台窗口与输入信号</small></span><button className={monitoring ? "toggle on" : "toggle"} aria-pressed={monitoring} onClick={() => void toggleMonitoring()}><i /></button></div>
-              <div className="setting-row"><span><b>不活跃阈值</b><small>从最后一次输入开始回填；监控断档另行记录</small></span><select defaultValue="6" onChange={(event) => void updateIdleThreshold(Number(event.target.value))}><option value="6">6 分钟</option><option value="10">10 分钟</option><option value="15">15 分钟</option></select></div>
+              <div className="setting-row"><span><b>不活跃阈值</b><small>从最后一次输入开始回填；监控断档另行记录</small></span><select aria-label="不活跃阈值" value={idleThresholdMinutes} onChange={(event) => void chooseIdleThreshold(Number(event.target.value))}><option value="6">6 分钟</option><option value="10">10 分钟</option><option value="15">15 分钟</option></select></div>
             </SettingsSection>
             <SettingsSection
               id="ai-provider-settings"
