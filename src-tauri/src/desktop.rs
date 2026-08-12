@@ -48,7 +48,7 @@ use crate::ai_executor::{
 use crate::ai_review::{AiReviewFilter, AiReviewRecord, AiReviewResolution};
 use crate::app::{
     AppService, AppSettings, DailyAnalysisResult, DashboardSnapshot, EvidenceBasedFinding,
-    SettingsPatch, TrendAnalysisJobPayload, TrendAnalysisResult, render_daily_markdown,
+    SettingsPatch, TrendAnalysisJobPayload, TrendAnalysisResult, UiTheme, render_daily_markdown,
     render_trend_markdown_with_workbench, trend_analysis_allowed_candidates,
 };
 use crate::browser::{fetch_public_html_summary, redact_url_for_storage, scan_chromium_history};
@@ -1399,6 +1399,7 @@ fn retry_ai_review(
 
 #[tauri::command]
 fn update_settings(
+    app: tauri::AppHandle,
     state: State<'_, DesktopState>,
     patch: SettingsPatch,
 ) -> Result<AppSettings, String> {
@@ -1424,9 +1425,49 @@ fn update_settings(
         }
         selected_api_provider(&candidate, &providers)?;
     }
-    service
+    let settings = service
         .update_settings(patch)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    #[cfg(target_os = "macos")]
+    apply_macos_window_theme(&app, settings.ui_theme);
+    Ok(settings)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_theme_rgb(theme: UiTheme) -> (u8, u8, u8) {
+    match theme {
+        UiTheme::MossNocturne => (0xf8, 0xf1, 0xdf),
+        UiTheme::ClassicWorkbench => (0xf4, 0xf7, 0xfa),
+        UiTheme::MoonGlass => (0xed, 0xf7, 0xfb),
+        UiTheme::SoftPaper => (0xf4, 0xf3, 0xf7),
+        UiTheme::BlueprintData => (0xed, 0xf3, 0xf7),
+        UiTheme::KnowledgeSpace => (0x05, 0x09, 0x14),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn apply_macos_window_theme(app: &tauri::AppHandle, theme: UiTheme) {
+    use objc2_app_kit::{NSColor, NSTitlebarSeparatorStyle, NSWindow};
+
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let (red, green, blue) = macos_theme_rgb(theme);
+    let native_window = window.clone();
+    let _ = window.run_on_main_thread(move || {
+        let Ok(ns_window_ptr) = native_window.ns_window() else {
+            return;
+        };
+        let ns_window = unsafe { &*(ns_window_ptr as *mut NSWindow) };
+        let color = NSColor::colorWithRed_green_blue_alpha(
+            f64::from(red) / 255.0,
+            f64::from(green) / 255.0,
+            f64::from(blue) / 255.0,
+            1.0,
+        );
+        ns_window.setBackgroundColor(Some(&color));
+        ns_window.setTitlebarSeparatorStyle(NSTitlebarSeparatorStyle::None);
+    });
 }
 
 fn settings_patch_requires_api_provider_validation(patch: &SettingsPatch) -> bool {
@@ -3077,8 +3118,13 @@ pub fn run() {
             let database = Database::open(data_dir.join("monitor.db"))?;
             database.quarantine_unavailable_codex_jobs(now_ms())?;
             let browser_watcher_token = load_or_create_browser_watcher_token(&database)?;
+            let service = AppService::new(database);
+            #[cfg(target_os = "macos")]
+            if let Ok(settings) = service.get_settings() {
+                apply_macos_window_theme(app.handle(), settings.ui_theme);
+            }
             app.manage(DesktopState {
-                service: Mutex::new(AppService::new(database)),
+                service: Mutex::new(service),
                 ai_connection_health: AiConnectionHealthServiceState::new(
                     AiConnectionHealth::initial(),
                 ),

@@ -9,7 +9,6 @@ import {
   ClipboardCheck,
   FileText,
   Focus,
-  Gauge,
   ListChecks,
   Network,
   RefreshCw,
@@ -142,7 +141,7 @@ function resolveHeaderLayout(viewportWidth: number): HeaderLayout {
 }
 
 const themeOptions: Array<{ id: UiTheme; name: string; note: string }> = [
-  { id: "moss-nocturne", name: "暮野观测", note: "暖黑苔绿与柔和琥珀数据光" },
+  { id: "moss-nocturne", name: "日光轨道", note: "奶油日光、琥珀与清爽鼠尾草" },
   { id: "classic-workbench", name: "经典工作台", note: "清晰、克制，接近旧版体验" },
   { id: "moon-glass", name: "月白玻璃", note: "冰蓝玻璃与柔和高光" },
   { id: "soft-paper", name: "柔彩纸张", note: "低饱和色块与编辑式层级" },
@@ -407,6 +406,7 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
   ));
   const [tab, setTab] = useState<Tab>("today");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [todayAssistantOpen, setTodayAssistantOpen] = useState(false);
   const [graphOpen, setGraphOpen] = useState(false);
   const [monitoring, setMonitoring] = useState(true);
   const [segments, setSegments] = useState(() => initialSegments ?? (isDesktopRuntime() ? [] : sampleSegments));
@@ -1407,6 +1407,7 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
   };
 
   const openWorkflowTask = (taskId: string) => {
+    setTodayAssistantOpen(false);
     setWorkflowTaskId(taskId);
     setWorkflowRefreshKey((value) => value + 1);
     setTab("workflow");
@@ -1432,13 +1433,7 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
   return (
     <div ref={setAppFrame} className="app-frame" data-theme={uiTheme} data-header-layout={headerLayout} data-scroll-container="dashboard" style={{ "--font-selected": cssFontFamily(uiFont) } as React.CSSProperties}>
       <header ref={headerRef} className="app-header">
-        <div className="brand-lockup">
-          <div className="brand-mark"><Gauge size={22} strokeWidth={2.2} /></div>
-          <div>
-            <span>ORBIT</span>
-            <h1>Orbit</h1>
-          </div>
-        </div>
+        <div className="header-balance-space" aria-hidden="true" />
         <nav className="main-tabs" aria-label="主导航">
           {tabOptions.map((item) => {
             const TabIcon = item.icon;
@@ -1472,6 +1467,27 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
             <button className="icon-button" aria-label="打开专注工具" aria-expanded={focusOpen} onClick={() => setFocusOpen((value) => !value)}><Focus size={18} /></button>
             {focusOpen && <CompactFocusPopover goal={dailyGoal.goals} minutes={focusMinutes} running={focusRunning} taskId={focusTaskId} tasks={dailyLedger?.tasks ?? []} canStart={selectedDate === new Date().toLocaleDateString("sv-SE")} onTaskChange={setFocusTaskId} onMinutesChange={setFocusMinutes} onToggle={() => void toggleFocus()} />}
           </div>
+          {tab === "today" && <div className="today-assistant-anchor">
+            <button
+              type="button"
+              className="icon-button today-assistant-trigger"
+              aria-label="打开今日目标和 AI 分析"
+              aria-controls="today-assistant-popover"
+              aria-expanded={todayAssistantOpen}
+              title="今日目标与 AI 分析"
+              onClick={() => setTodayAssistantOpen((value) => !value)}
+            ><Sparkles size={18} /></button>
+            <aside id="today-assistant-popover" className="today-assistant-popover" aria-label="今日目标与 AI 分析" hidden={!todayAssistantOpen}>
+              <header>
+                <div><span>ORBIT ASSISTANT</span><h2>今日助理</h2></div>
+                <button type="button" className="icon-button" aria-label="关闭今日助理" onClick={() => setTodayAssistantOpen(false)}><X size={18} /></button>
+              </header>
+              <div className="today-assistant-content">
+                <section className="goal-grid"><DailyGoalPanel selectedDate={selectedDate} localPreview={!isDesktopRuntime()} onGoalChange={setDailyGoal} onOpenTask={openWorkflowTask} onLedgerChanged={setDailyLedger} /></section>
+                <AiAnalysisPanel analysis={visibleDailyAnalysis} onReanalyze={() => void reanalyzeDaily()} />
+              </div>
+            </aside>
+          </div>}
           <button className="icon-button" aria-label="刷新数据" onClick={() => void refreshDashboard()}><RefreshCw size={18} /></button>
           {showInlineSettingsButton && <button ref={settingsButtonRef} className="icon-button" aria-label="打开设置" onClick={() => setSettingsOpen(true)}><Settings size={19} /></button>}
         </div>
@@ -1480,7 +1496,7 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
       <main>
         {tab === "today" && (
           <>
-            <section className="page-heading">
+            <section className="page-heading" data-page-heading="today">
               <div><span>TODAY</span></div>
               <p>总监测 {formatDuration(metrics.monitoredSeconds)} · 分类覆盖率 {classificationCoverage}% · 待复核/补算 {pendingSegments.length} 项{dailyWorkLedgerRollup ? ` · 台账任务 ${dailyWorkLedgerRollup.tasks.length}` : ""} · {desktopMessage}</p>
             </section>
@@ -1517,9 +1533,6 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
               pulse={timelinePulse}
               onPulseEnd={() => setTimelinePulse(false)}
             />
-
-            <section className="goal-grid"><DailyGoalPanel selectedDate={selectedDate} localPreview={!isDesktopRuntime()} onGoalChange={setDailyGoal} onOpenTask={openWorkflowTask} onLedgerChanged={setDailyLedger} /></section>
-            <AiAnalysisPanel analysis={visibleDailyAnalysis} onReanalyze={() => void reanalyzeDaily()} />
           </>
         )}
 

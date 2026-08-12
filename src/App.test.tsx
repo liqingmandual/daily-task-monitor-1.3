@@ -288,7 +288,7 @@ describe("App", () => {
     expect(html).toContain("活动构成");
     expect(html).toContain("时间分布");
     expect(html).toContain("应用排行");
-    expect(html).toContain("活动时间线");
+    expect(html).toContain("活跃时间线");
     expect(html).toContain("搜索/调研");
     expect(html).toContain("Chrome");
   });
@@ -322,7 +322,8 @@ describe("App", () => {
   it("keeps operational details behind the settings action", () => {
     const html = renderToStaticMarkup(<App initialSegments={segments} />);
 
-    expect(html).toContain("<h1>Orbit</h1>");
+    expect(html).not.toContain('class="brand-lockup"');
+    expect(html).toContain('class="header-balance-space"');
     expect(html).not.toContain("每日任务监测系统");
     expect(html).toContain("aria-label=\"打开设置\"");
     expect(html).not.toContain("高级与校准</h2>");
@@ -342,6 +343,7 @@ describe("App", () => {
     try {
       await act(async () => root.render(<App initialSegments={segments} />));
       expect(rootElement.querySelector('button[aria-label="打开设置"]')).toBeNull();
+      expect(rootElement.querySelector(".app-frame")?.hasAttribute("data-window-chrome")).toBe(false);
       await act(async () => openSettings?.());
 
       expect(openSettings).toBeTypeOf("function");
@@ -376,7 +378,7 @@ describe("App", () => {
     expect(appsIndex).toBeLessThan(timeIndex);
   });
 
-  it("composes Today with explanatory analysis before the detailed timeline", () => {
+  it("keeps goals and AI in the hidden assistant before the Today workspace", () => {
     const html = renderToStaticMarkup(<App initialSegments={segments} />);
 
     expect(html).toContain('data-analysis-layout="three-column"');
@@ -387,6 +389,7 @@ describe("App", () => {
     expect(html).toContain('aria-label="打开专注工具"');
 
     const headingIndex = html.indexOf('class="page-heading"');
+    const assistantIndex = html.indexOf('id="today-assistant-popover"');
     const metricsIndex = html.indexOf('class="metric-grid"');
     const analysisIndex = html.indexOf('data-analysis-layout="three-column"');
     const timelineIndex = html.indexOf('id="activity-timeline"');
@@ -394,16 +397,19 @@ describe("App", () => {
     const aiAnalysisIndex = html.indexOf('class="panel ai-analysis-panel"');
 
     expect(headingIndex).toBeGreaterThanOrEqual(0);
+    expect(assistantIndex).toBeGreaterThanOrEqual(0);
+    expect(html).toContain('aria-expanded="false"');
     expect(metricsIndex).toBeGreaterThanOrEqual(0);
     expect(analysisIndex).toBeGreaterThanOrEqual(0);
     expect(timelineIndex).toBeGreaterThanOrEqual(0);
     expect(goalIndex).toBeGreaterThanOrEqual(0);
     expect(aiAnalysisIndex).toBeGreaterThanOrEqual(0);
+    expect(assistantIndex).toBeLessThan(goalIndex);
+    expect(goalIndex).toBeLessThan(aiAnalysisIndex);
+    expect(aiAnalysisIndex).toBeLessThan(headingIndex);
     expect(headingIndex).toBeLessThan(metricsIndex);
     expect(metricsIndex).toBeLessThan(analysisIndex);
     expect(analysisIndex).toBeLessThan(timelineIndex);
-    expect(timelineIndex).toBeLessThan(goalIndex);
-    expect(goalIndex).toBeLessThan(aiAnalysisIndex);
   });
 
   it("shows the first-run AI automation notice and persists acknowledgement", async () => {

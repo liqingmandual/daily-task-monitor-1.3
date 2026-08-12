@@ -4,7 +4,7 @@ import App from "../../App";
 import appSource from "../../App.tsx?raw";
 import { appIdentityKey, type AppIdentity } from "../../lib/app-identity";
 import type { Segment } from "../../lib/metrics";
-import { TimelinePanel, scrollIntoViewWithHeaderOffset } from "./TimelinePanel";
+import { anchoredTimelineScrollLeft, buildTimelineClusters, TimelinePanel, scrollIntoViewWithHeaderOffset } from "./TimelinePanel";
 
 const segments: Segment[] = [
   {
@@ -50,36 +50,39 @@ describe("TimelinePanel", () => {
     expect(html).not.toContain(">Away<");
   });
 
-  it("renders filtered activity newest first without mutating the input", () => {
-    const latest: Segment = {
-      ...segments[0],
-      id: "latest",
-      startMs: 11 * 3_600_000,
-      endMs: 12 * 3_600_000,
-      title: "Latest activity",
-    };
-    const middle: Segment = {
-      ...segments[0],
-      id: "middle",
-      startMs: 10 * 3_600_000,
-      endMs: 10.5 * 3_600_000,
-      title: "Middle activity",
-    };
-    const unordered = [segments[0], latest, middle];
-    const originalIds = unordered.map((item) => item.id);
+  it("renders a zoomable continuous day track from midnight to midnight", () => {
+    const html = renderToStaticMarkup(<TimelinePanel segments={segments} filter={{ mode: "all" }} onFilterChange={() => {}} onChangeClassification={() => {}} />);
 
-    const html = renderToStaticMarkup(
-      <TimelinePanel
-        segments={unordered}
-        filter={{ mode: "all" }}
-        onFilterChange={() => {}}
-        onChangeClassification={() => {}}
-      />,
-    );
+    expect(html).toContain('aria-label="可缩放的全天应用时间线，每格五分钟，仅显示占比最高的应用"');
+    expect(html).toContain('aria-label="时间线缩放级别"');
+    expect(html).toContain("滚轮缩放 · 拖动平移 · 5 分钟 TOP 1");
+    expect(html).toContain(">00:00<");
+    expect(html).toContain(">24:00<");
+    expect(html.match(/class="orbit-hour-grid"/g)).toHaveLength(24);
+  });
 
-    expect(html.indexOf("Latest activity")).toBeLessThan(html.indexOf("Middle activity"));
-    expect(html.indexOf("Middle activity")).toBeLessThan(html.indexOf("Psychology research"));
-    expect(unordered.map((item) => item.id)).toEqual(originalIds);
+  it("keeps the time beneath the mouse at the same viewport position while zooming", () => {
+    expect(anchoredTimelineScrollLeft(.5, 2_400, 300)).toBe(900);
+    expect(anchoredTimelineScrollLeft(.75, 4_800, 500)).toBe(3_100);
+  });
+
+  it("uses five-minute buckets and keeps only the top application in each bucket", () => {
+    const hour = 3_600_000;
+    const minute = 60_000;
+    const base = { ...segments[0], startMs: 10 * hour, endMs: 10 * hour + 5 * minute };
+    const summaries = buildTimelineClusters([
+      { ...base, id: "chrome", app: "Chrome", endMs: 10 * hour + 4 * minute },
+      { ...base, id: "code-early", app: "Code", startMs: 10 * hour + 4 * minute },
+      { ...base, id: "code", app: "Code", startMs: 10 * hour + 5 * minute, endMs: 10 * hour + 8 * minute },
+      { ...base, id: "notes", app: "Notes", startMs: 10 * hour + 8 * minute, endMs: 10 * hour + 10 * minute },
+    ]);
+
+    expect(summaries).toHaveLength(2);
+    expect(summaries[0]).toMatchObject({ startMs: 10 * hour, endMs: 10 * hour + 5 * minute });
+    expect(summaries[0].apps.map((item) => item.app)).toEqual(["Chrome"]);
+    expect(summaries[1]).toMatchObject({ startMs: 10 * hour + 5 * minute, endMs: 10 * hour + 10 * minute });
+    expect(summaries[1].apps.map((item) => item.app)).toEqual(["Code"]);
+    expect(summaries.every((item) => item.apps.length === 1)).toBe(true);
   });
 
   it("renders the resolved app identity and shared native icon", () => {

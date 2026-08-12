@@ -99,18 +99,18 @@ What not to copy:
 
 ## 3. Orbit's own metaphor
 
-The product metaphor is a **day atlas**:
+The product metaphor is a **personal orbit**:
 
-- Today is the current route.
-- The activity timeline is the track already travelled.
-- Applications and categories are landmarks.
-- Trends compare routes across days and weeks.
-- Projects connect observed time to intended destinations.
-- AI analysis is a field note based on selected evidence, never an oracle.
+- Today is the current revolution around the user's intentions.
+- The activity timeline is the path already traced.
+- Applications and categories are bodies that attract attention.
+- Trends reveal how the orbit changes across days and weeks.
+- Projects provide stable centers for otherwise scattered activity.
+- AI analysis is an observation based on selected evidence, never an oracle.
 
 This metaphor should remain subtle. Use it in section naming, empty states,
 transitions, and a small number of illustrations. Do not turn every control into
-a map ornament.
+an astronomical ornament.
 
 ## 4. Information architecture
 
@@ -139,8 +139,12 @@ interaction; it is not the default container for every label and value.
 
 ### Color
 
-- The neutral canvas should dominate. Accent color indicates selection and the
-  current temporal context.
+- The neutral canvas should dominate. Orbit's default canvas is sunlit cream,
+  with amber for selection and restrained sage as a balancing secondary color.
+  Avoid allowing a dark moss green to tint every surface.
+- Timeline applications use a sun-washed mineral palette—terracotta, sage,
+  ocean blue, muted violet, ochre, teal, and dusty rose—rather than bright
+  candy colors.
 - Reserve saturated colors for semantic data and status.
 - A category keeps the same color in timelines, legends, charts, filters, and
   detail views.
@@ -178,14 +182,30 @@ interaction; it is not the default container for every label and value.
 
 ### Navigation
 
-- One stable primary sidebar; current location is visible without relying on
+- One stable primary navigation; current location is visible without relying on
   icon color alone.
+- On macOS, keep the normal native titlebar and place Orbit's five primary
+  destinations in a separate toolbar directly below it. Native window movement
+  and resizing take priority over visual titlebar integration. The native
+  NSWindow background and toolbar share an exact per-theme color, while the
+  toolbar removes its own divider and shadow so both rows read as one chrome.
 - Badges communicate actionable state, not decoration.
 - Settings are secondary and should never compete with daily review.
 
 ### Timeline
 
 - The timeline is visually dominant on Today.
+- Its overview is a continuous 00:00–24:00 color canvas, not a row of hourly
+  cards. Users can zoom horizontally without changing the underlying segment
+  geometry.
+- The overview aggregates activity into five-minute buckets. Each bucket shows
+  only its top application; adjacent buckets with the same winner merge into a
+  calmer continuous band.
+- Mouse input is first-class: wheel around the pointer to zoom, drag empty canvas
+  space to pan, and retain the slider and scrollbar as explicit alternatives.
+- Application colors carry the overview. Icons, titles, categories, and editing
+  controls belong in the legend or selected-range inspector, never inside a
+  narrow color segment.
 - Segment geometry must remain stable while details open.
 - Hover or selection reveals exact time, duration, application, category, and
   local evidence. Sensitive titles and URLs should be easy to hide.
@@ -261,3 +281,5 @@ This order keeps later pages from inventing their own visual dialects.
 
 - Mole product site: <https://mole.fit/zh/>
 - Rize product site: <https://rize.io/>
+- ManicTime day view: <https://docs.manictime.com/win-client/overview>
+- ManicTime time selection: <https://docs.manictime.com/win-client/selecting-time>

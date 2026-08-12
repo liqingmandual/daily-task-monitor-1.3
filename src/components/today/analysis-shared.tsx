@@ -129,7 +129,7 @@ export function DonutChart({
           radius: ["62%", "84%"],
           center: ["50%", "50%"],
           padAngle: 2,
-          itemStyle: { borderRadius: 4, borderColor: "#fff", borderWidth: 2 },
+          itemStyle: { borderRadius: 4, borderColor: "transparent", borderWidth: 2 },
           label: { show: false },
           data: donutSeriesData(initialItems),
         }],
