@@ -20,6 +20,7 @@ import {
   classifySegment,
   getAiConnectionHealth,
   getCodexHealth,
+  getCollectionHealth,
   getDailyGoal,
   listDailyGoalTaskLinks,
   recordDailyActualOutputProgress,
@@ -27,6 +28,7 @@ import {
   refreshAiConnectionHealth,
   listenAiConnectionHealthChanged,
   listenActivityChanged,
+  listenCollectionHealthChanged,
   testCodexCli,
   loadTrendAnalysis,
   loadTrendRange,
@@ -49,6 +51,7 @@ import {
   type AiConnectionHealth,
   type BackendSegment,
   type CodexHealth,
+  type CollectionHealth,
   type TrendPayload,
   type TrendAnalysisResult,
   type TrendWorkbenchPayload,
@@ -70,6 +73,23 @@ describe("desktop bridge", () => {
   beforeEach(() => {
     vi.mocked(invoke).mockReset();
     vi.mocked(listen).mockReset();
+  });
+
+  it("uses the collection health command and event contracts", async () => {
+    const health = { generatedAtMs: 1_000 } as CollectionHealth;
+    const stop = vi.fn();
+    vi.mocked(invoke).mockResolvedValueOnce(health);
+    vi.mocked(listen).mockResolvedValueOnce(stop);
+    const onChanged = vi.fn();
+
+    await expect(getCollectionHealth()).resolves.toBe(health);
+    await expect(listenCollectionHealthChanged(onChanged)).resolves.toBe(stop);
+
+    expect(invoke).toHaveBeenCalledWith("get_collection_health");
+    expect(listen).toHaveBeenCalledWith("collection-health-changed", expect.any(Function));
+    const eventHandler = vi.mocked(listen).mock.calls[0][1];
+    eventHandler({ payload: undefined } as never);
+    expect(onChanged).toHaveBeenCalledOnce();
   });
 
   it("accepts an inclusive 366-day trend range", () => {

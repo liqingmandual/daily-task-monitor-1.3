@@ -62,6 +62,7 @@ import {
   finishFocus,
   getAiConnectionHealth,
   getAppSettings,
+  getCollectionHealth,
   getCodexHealth,
   importLegacyActivity,
   isDesktopRuntime,
@@ -70,6 +71,7 @@ import {
   listBrowserSources,
   listenActivityChanged,
   listenAiConnectionHealthChanged,
+  listenCollectionHealthChanged,
   listenDailyAnalysisChanged,
   listenWorkflowChanged,
   loadDashboardSnapshot,
@@ -92,6 +94,8 @@ import {
   type BrowserSource,
   type CodexHealth,
   type CodexHealthStatus,
+  type CollectionChannelHealth,
+  type CollectionHealth,
   type DailyGoalRecord,
   type ScopedDailyAnalysisResult,
   type UiTheme,
@@ -111,7 +115,7 @@ import type { KnowledgeGraphNode } from "./lib/desktop";
 
 const KnowledgeGraphPage = lazy(() => import("./KnowledgeGraphPage"));
 
-type Tab = "today" | "trends" | "workflow" | "ai-review";
+type Tab = "today" | "trends" | "workflow" | "ai-review" | "health";
 type HeaderLayout = "mobile" | "compact" | "wide";
 
 function resolveHeaderLayout(viewportWidth: number): HeaderLayout {
@@ -187,6 +191,60 @@ function formatDuration(seconds: number): string {
 
 function monitoredShare(seconds: number, monitoredSeconds: number): string {
   return monitoredSeconds > 0 ? `${(seconds / monitoredSeconds * 100).toFixed(1)}%` : "—";
+}
+
+const collectionStatusLabel: Record<CollectionChannelHealth["status"], string> = {
+  healthy: "正常",
+  degraded: "需关注",
+  paused: "已暂停",
+  unavailable: "不可用",
+  "permission-denied": "缺少权限",
+};
+
+function CollectionHealthPanel({ health }: { health: CollectionHealth | null }) {
+  if (!health) return <section className="panel collection-health-loading" aria-live="polite"><RefreshCw className="spinning" size={20} /><div><b>正在检查采集状态</b><small>正在读取本机权限、采集器和浏览器通道…</small></div></section>;
+  const channels: Array<[string, CollectionChannelHealth]> = [
+    ["桌面应用", health.desktop],
+    ["窗口标题", health.windowTitle],
+    ["空闲检测", health.idle],
+    ["连续性", health.continuity],
+    ["屏幕录制权限", health.screenRecording],
+    ["浏览器实时 watcher", health.browserWatcher],
+    ["浏览器历史证据", health.browserHistory],
+  ];
+  const issueCount = channels.filter(([, channel]) => channel.status !== "healthy").length;
+  const overallStatus = !health.monitoringEnabled ? "采集已暂停" : issueCount ? `${issueCount} 项需关注` : "全部正常";
+  const overallAccent = !health.monitoringEnabled ? "#d97706" : issueCount ? "#d97706" : "#059669";
+  const formatLastSuccess = (value: number | null) => value
+    ? `最近成功 ${new Date(value).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}`
+    : "尚无成功记录";
+  return <div className="collection-health" aria-label="采集健康诊断">
+    <section className="metric-grid health-metric-grid" aria-label="采集健康概览">
+      <article className="metric-card" style={{ "--accent": overallAccent } as React.CSSProperties}><span>整体状态</span><strong>{overallStatus}</strong><small>{health.monitoringEnabled ? `${channels.length - issueCount}/${channels.length} 个通道正常` : "可在设置中恢复桌面监测"}</small></article>
+      <article className="metric-card" style={{ "--accent": "#2563eb" } as React.CSSProperties}><span>浏览器实时来源</span><strong>{health.watcherSourceCount}</strong><small>当前活跃的扩展连接</small></article>
+      <article className="metric-card" style={{ "--accent": "#7c3aed" } as React.CSSProperties}><span>最近 24 小时网页计量</span><strong>{formatDuration(health.measuredBrowserSeconds)}</strong><small>{health.measuredBrowserSliceCount} 个可信心跳切片</small></article>
+    </section>
+
+    <section className="panel collection-channel-panel">
+      <div className="panel-heading"><div><span>CHANNEL STATUS</span><h2>采集通道</h2></div><i><Activity size={18} /></i></div>
+      <div className="collection-health-grid">
+        {channels.map(([label, channel]) => <article className="collection-health-row" data-status={channel.status} key={label}>
+          <div className="collection-health-row-head"><span><i aria-hidden="true" /><b>{label}</b></span><strong>{collectionStatusLabel[channel.status]}</strong></div>
+          <p>{channel.detail}</p>
+          <small>{formatLastSuccess(channel.lastSuccessAtMs)}</small>
+        </article>)}
+      </div>
+    </section>
+
+    <section className="panel watcher-config-panel">
+      <div className="panel-heading"><div><span>BROWSER WATCHER</span><h2>浏览器扩展连接</h2></div><i><Network size={18} /></i></div>
+      <p>扩展通过本机回环地址发送活动标签页心跳。连接码仅用于这台电脑，不会发送到外部服务。</p>
+      <div className="watcher-config-grid">
+        <label htmlFor="browser-watcher-endpoint"><span>扩展服务地址</span><input id="browser-watcher-endpoint" readOnly value={health.watcherEndpoint} /></label>
+        <label htmlFor="browser-watcher-token"><span>本机连接码</span><input id="browser-watcher-token" readOnly value={health.watcherToken} /></label>
+      </div>
+    </section>
+  </div>;
 }
 
 const DASHBOARD_SYNC_INTERVAL_MS = 60_000;
@@ -328,6 +386,7 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
   const [desktopMessage, setDesktopMessage] = useState("本地预览数据");
   const [providers, setProviders] = useState<AiProvider[]>([]);
   const [browserSources, setBrowserSources] = useState<BrowserSource[]>([]);
+  const [collectionHealth, setCollectionHealth] = useState<CollectionHealth | null>(null);
   const [settingsMessage, setSettingsMessage] = useState("");
   const [idleThresholdMinutes, setIdleThresholdMinutes] = useState(6);
   const [aiBackfillEnabled, setAiBackfillEnabled] = useState(false);
@@ -1050,6 +1109,30 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
     }).catch((error) => setSettingsMessage(String(error)));
   }, [settingsOpen]);
 
+  useEffect(() => {
+    if (tab !== "health" || !isDesktopRuntime()) return;
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    const refresh = () => {
+      void getCollectionHealth().then((health) => {
+        if (active) setCollectionHealth(health);
+      }).catch((error) => {
+        if (active) setDesktopMessage(`采集健康检查失败：${String(error)}`);
+      });
+    };
+    refresh();
+    const timer = setInterval(refresh, 15_000);
+    void listenCollectionHealthChanged(refresh).then((stopListening) => {
+      if (active) unlisten = stopListening;
+      else stopListening();
+    }).catch(() => undefined);
+    return () => {
+      active = false;
+      clearInterval(timer);
+      unlisten?.();
+    };
+  }, [tab]);
+
   const configureProvider = async (provider: AiProvider) => {
     let persisted = false;
     try {
@@ -1269,9 +1352,9 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
           </div>
         </div>
         <nav className="main-tabs" aria-label="主导航">
-          {(["today", "trends", "workflow", "ai-review"] as Tab[]).map((item) => (
+          {(["today", "trends", "workflow", "ai-review", "health"] as Tab[]).map((item) => (
             <button key={item} className={tab === item ? "active" : ""} onClick={() => { if (item === "ai-review") setAiReviewSubjectId(null); setTab(item); }}>
-              {item === "today" ? "今日" : item === "trends" ? "趋势" : item === "workflow" ? "工作流" : "AI 审核"}
+              {item === "today" ? "今日" : item === "trends" ? "趋势" : item === "workflow" ? "工作流" : item === "ai-review" ? "AI 审核" : "健康诊断"}
             </button>
           ))}
         </nav>
@@ -1373,6 +1456,14 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
           refreshKey={workflowRefreshKey}
         />}
         {tab === "ai-review" && <AiReviewPage subjectId={aiReviewSubjectId} onResolved={handleAiReviewResolved} />}
+        {tab === "health" && <>
+          <section className="page-heading">
+            <div><span>COLLECTION HEALTH</span><h2>采集健康诊断</h2></div>
+            <p>检查本机活动采集、系统权限、连续性以及浏览器实时数据通道。</p>
+          </section>
+          <div className="health-page-toolbar"><span>数据每 15 秒自动刷新</span><button className="secondary-action" type="button" aria-label="刷新采集健康诊断" onClick={() => void getCollectionHealth().then(setCollectionHealth).catch((error) => setDesktopMessage(`采集健康检查失败：${String(error)}`))}><RefreshCw size={16} />立即刷新</button></div>
+          <CollectionHealthPanel health={collectionHealth} />
+        </>}
       </main>
 
       {aiAutomationNoticeOpen && (

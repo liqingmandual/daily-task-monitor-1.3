@@ -77,6 +77,37 @@ export interface BrowserSource {
   available: boolean;
 }
 
+export type CollectionChannelStatus =
+  | "healthy"
+  | "degraded"
+  | "paused"
+  | "unavailable"
+  | "permission-denied";
+
+export interface CollectionChannelHealth {
+  status: CollectionChannelStatus;
+  lastSuccessAtMs: number | null;
+  detail: string;
+}
+
+export interface CollectionHealth {
+  generatedAtMs: number;
+  platform: string;
+  monitoringEnabled: boolean;
+  desktop: CollectionChannelHealth;
+  windowTitle: CollectionChannelHealth;
+  idle: CollectionChannelHealth;
+  continuity: CollectionChannelHealth;
+  screenRecording: CollectionChannelHealth;
+  browserWatcher: CollectionChannelHealth;
+  browserHistory: CollectionChannelHealth;
+  watcherEndpoint: string;
+  watcherToken: string;
+  watcherSourceCount: number;
+  measuredBrowserSliceCount: number;
+  measuredBrowserSeconds: number;
+}
+
 export interface AppSettings {
   idleThresholdMinutes: number;
   monitoringEnabled: boolean;
@@ -144,6 +175,7 @@ export interface AiConnectionHealth {
 export const AI_CONNECTION_HEALTH_CHANGED_EVENT = "ai-connection-health-changed";
 export const WORKFLOW_CHANGED_EVENT = "workflow-changed";
 export const ACTIVITY_CHANGED_EVENT = "activity-changed";
+export const COLLECTION_HEALTH_CHANGED_EVENT = "collection-health-changed";
 
 export interface ActivityChangedEvent {
   observedAtMs: number;
@@ -1377,6 +1409,18 @@ export async function listenActivityChanged(
   handler: (event: ActivityChangedEvent) => void,
 ): Promise<UnlistenFn> {
   return listen<ActivityChangedEvent>(ACTIVITY_CHANGED_EVENT, (event) => {
+    handler(event.payload);
+  });
+}
+
+export async function getCollectionHealth(): Promise<CollectionHealth> {
+  return invoke<CollectionHealth>("get_collection_health");
+}
+
+export async function listenCollectionHealthChanged(
+  handler: (event: { observedAtMs: number }) => void,
+): Promise<UnlistenFn> {
+  return listen<{ observedAtMs: number }>(COLLECTION_HEALTH_CHANGED_EVENT, (event) => {
     handler(event.payload);
   });
 }

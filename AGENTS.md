@@ -17,11 +17,15 @@ capture, key contents, cookies, or form contents.
 - `src-tauri/src/macos_collector.rs`: macOS foreground and idle collector.
 - `src-tauri/src/monitor.rs`: platform-neutral segment state machine.
 - `src-tauri/src/browser.rs`: read-only Chromium history parser.
+- `src-tauri/src/browser_watcher.rs`: validated active-tab heartbeat protocol.
+- `src-tauri/src/browser_watcher_server.rs`: authenticated loopback listener.
+- `extensions/`: Chromium, Firefox, and Safari watcher source/manifests.
 - `src-tauri/src/desktop.rs`: Tauri commands and background workers.
 - `src-tauri/src/db.rs`: migrations and SQLite persistence.
 - `src/`: React UI and Tauri bridge.
 - `docs/PRODUCT_AND_COMPETITORS.md`: product gap analysis and roadmap.
 - `docs/MACOS.md`: macOS implementation, permissions, and validation.
+- `docs/BROWSER_WATCHER.md`: watcher privacy boundary, protocol, and setup.
 
 ## Development rules
 

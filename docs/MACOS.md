@@ -26,8 +26,10 @@ macOS may suppress window titles until the app has Screen Recording permission.
 Foreground application identity and idle time can still be available without a
 title. Production onboarding should explain the exact collected metadata before
 opening System Settings and should degrade gracefully when permission is denied.
-This local-development phase does not add installer metadata or a permission
-onboarding flow; those belong to a future distribution phase.
+The settings page now reports Screen Recording permission without triggering a
+system prompt, alongside last-success timestamps for app, title, idle,
+continuity, browser watcher, and browser-history channels. Installer metadata
+and a guided permission prompt remain part of a future distribution phase.
 
 Expected settings location:
 
@@ -45,6 +47,7 @@ npm install --global pnpm@10
 pnpm install --frozen-lockfile
 pnpm test
 cargo test --manifest-path src-tauri/Cargo.toml --all-targets
+pnpm run build:extensions
 pnpm tauri dev
 ```
 
@@ -67,6 +70,16 @@ cache remain separated below the edition-specific storage name.
 6. Check Chrome/Edge/Brave/Arc profiles and exclusion rules.
 7. Pause from the tray, close the dashboard, and fully quit from the tray.
 8. Verify local-only operation with networking disabled.
+
+After steps 3–8, run `scripts/macos-p0-smoke.sh`. Pass the absolute path to
+`monitor.db` if automatic discovery does not find the current edition. Exit 0
+means the database is healthy and a desktop sample was written in the last two
+minutes; exit 2 means the database is healthy but recent collection needs
+attention. Record the macOS version, hardware, permission state, idle threshold,
+sleep/wake times, offline interval, and script output in the test report. Do not
+paste window titles, URLs, or executable paths into reports.
+Use `docs/MACOS_P0_ACCEPTANCE_TEMPLATE.md` so each real-device run records the
+same scenarios and evidence.
 
 The macOS collector unit tests perform a non-persisting smoke read of the
 foreground application, idle clock, and monotonic uptime. They intentionally do

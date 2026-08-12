@@ -15,6 +15,7 @@ use crate::ai_review::{
     AiReviewKind, AiReviewRecord, AiReviewResolution, AiReviewState,
 };
 use crate::browser::BrowserVisit;
+use crate::browser_watcher::BrowserActivitySlice;
 use crate::classifier::{AiDisposition, ManualRule, decide_ai_disposition};
 use crate::domain::{
     ActivityCategory, ActivityScope, AiClassificationReviewValue, AiWorkflowAssignmentReviewValue,
@@ -1498,6 +1499,33 @@ impl Database {
             transaction.execute_batch("PRAGMA user_version = 10;")?;
             transaction.commit()?;
         }
+        if version < 11 {
+            self.connection.execute_batch(
+                "
+                BEGIN IMMEDIATE;
+                CREATE TABLE IF NOT EXISTS browser_activity_segments (
+                    id TEXT PRIMARY KEY,
+                    source_id TEXT NOT NULL,
+                    browser TEXT NOT NULL,
+                    profile TEXT NOT NULL DEFAULT '',
+                    started_at_ms INTEGER NOT NULL,
+                    ended_at_ms INTEGER NOT NULL,
+                    url TEXT NOT NULL,
+                    domain TEXT NOT NULL,
+                    title TEXT NOT NULL DEFAULT '',
+                    provenance TEXT NOT NULL
+                        CHECK(provenance IN ('watcher-heartbeat-v1')),
+                    CHECK(ended_at_ms >= started_at_ms)
+                );
+                CREATE INDEX IF NOT EXISTS idx_browser_activity_time
+                    ON browser_activity_segments(started_at_ms, ended_at_ms);
+                CREATE INDEX IF NOT EXISTS idx_browser_activity_source
+                    ON browser_activity_segments(source_id, ended_at_ms);
+                PRAGMA user_version = 11;
+                COMMIT;
+                ",
+            )?;
+        }
         Ok(())
     }
 
@@ -1825,6 +1853,44 @@ impl Database {
             ],
         )?;
         Ok(changed > 0)
+    }
+
+    pub fn insert_browser_activity_slice(&self, slice: &BrowserActivitySlice) -> Result<bool> {
+        let changed = self.connection.execute(
+            "INSERT OR IGNORE INTO browser_activity_segments(
+                id, source_id, browser, profile, started_at_ms, ended_at_ms,
+                url, domain, title, provenance
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                slice.id,
+                slice.source_id,
+                slice.browser,
+                slice.profile,
+                slice.started_at_ms,
+                slice.ended_at_ms,
+                slice.url,
+                slice.domain,
+                slice.title,
+                slice.provenance,
+            ],
+        )?;
+        Ok(changed > 0)
+    }
+
+    pub fn browser_activity_summary(
+        &self,
+        start_ms: i64,
+        end_ms: i64,
+    ) -> Result<(i64, i64, Option<i64>)> {
+        self.connection.query_row(
+            "SELECT COUNT(*),
+                    COALESCE(SUM(MAX(0, MIN(ended_at_ms, ?2) - MAX(started_at_ms, ?1))), 0),
+                    MAX(ended_at_ms)
+             FROM browser_activity_segments
+             WHERE ended_at_ms > ?1 AND started_at_ms < ?2",
+            params![start_ms, end_ms],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
     }
 
     pub fn latest_browser_context(

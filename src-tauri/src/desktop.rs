@@ -49,6 +49,8 @@ use crate::app::{
     render_trend_markdown_with_workbench, trend_analysis_allowed_candidates,
 };
 use crate::browser::{fetch_public_html_summary, redact_url_for_storage, scan_chromium_history};
+use crate::browser_watcher::{BrowserHeartbeat, BrowserWatcherEngine, is_browser_application};
+use crate::browser_watcher_server::{BROWSER_WATCHER_ENDPOINT, run_browser_watcher_server};
 use crate::db::{
     ActivitySampleWrite, ActivitySegmentRecord, DailyGoalRecord, Database,
     MonitoringContinuityCheckpoint,
@@ -58,7 +60,9 @@ use crate::edition::current_edition_identity;
 use crate::knowledge_graph::{KnowledgeGraphFilters, KnowledgeGraphPayload};
 use crate::legacy::{LegacyImportResult, import_activity_jsonl};
 #[cfg(target_os = "macos")]
-use crate::macos_collector::{MacOsCollector as PlatformCollector, system_uptime_ms};
+use crate::macos_collector::{
+    MacOsCollector as PlatformCollector, screen_recording_permission_granted, system_uptime_ms,
+};
 use crate::monitor::MonitorEngine;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use crate::monitor_continuity::{continuity_gap_segment, monitoring_gap_from_checkpoint};
@@ -105,6 +109,7 @@ pub const AI_CONNECTION_HEALTH_CHANGED_EVENT: &str = "ai-connection-health-chang
 pub const WORKFLOW_CHANGED_EVENT: &str = "workflow-changed";
 pub const ANALYSIS_CHANGED_EVENT: &str = "analysis-changed";
 pub const ACTIVITY_CHANGED_EVENT: &str = "activity-changed";
+pub const COLLECTION_HEALTH_CHANGED_EVENT: &str = "collection-health-changed";
 const AI_CONNECTION_HEALTH_INTERVAL: Duration = Duration::from_secs(10);
 const API_HEALTH_TIMEOUT: Duration = Duration::from_secs(8);
 const CODEX_HEALTH_TIMEOUT_MS: u64 = 5_000;
@@ -116,6 +121,80 @@ static APP_IDENTITY_CACHE: OnceLock<Mutex<HashMap<String, CachedExecutableIdenti
 pub struct DesktopState {
     service: Mutex<AppService>,
     ai_connection_health: AiConnectionHealthServiceState,
+    collection_runtime: Mutex<CollectionRuntimeState>,
+    browser_watcher: BrowserWatcherServiceState,
+}
+
+#[derive(Debug, Default)]
+struct CollectionRuntimeState {
+    last_persisted_at_ms: Option<i64>,
+    last_app_available_at_ms: Option<i64>,
+    last_title_available_at_ms: Option<i64>,
+    last_idle_read_at_ms: Option<i64>,
+    last_continuity_gap_at_ms: Option<i64>,
+    last_browser_history_scan_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Default)]
+struct BrowserWatcherRuntimeState {
+    engine: BrowserWatcherEngine,
+    listener_ready: bool,
+    listener_error: Option<String>,
+    last_heartbeat_at_ms: Option<i64>,
+    last_persisted_at_ms: Option<i64>,
+    connected_sources: HashMap<String, i64>,
+}
+
+struct BrowserWatcherServiceState {
+    token: String,
+    runtime: Mutex<BrowserWatcherRuntimeState>,
+}
+
+impl BrowserWatcherServiceState {
+    fn new(token: String) -> Self {
+        Self {
+            token,
+            runtime: Mutex::new(BrowserWatcherRuntimeState::default()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum CollectionChannelStatus {
+    Healthy,
+    Degraded,
+    Paused,
+    Unavailable,
+    PermissionDenied,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CollectionChannelHealth {
+    status: CollectionChannelStatus,
+    last_success_at_ms: Option<i64>,
+    detail: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CollectionHealth {
+    generated_at_ms: i64,
+    platform: String,
+    monitoring_enabled: bool,
+    desktop: CollectionChannelHealth,
+    window_title: CollectionChannelHealth,
+    idle: CollectionChannelHealth,
+    continuity: CollectionChannelHealth,
+    screen_recording: CollectionChannelHealth,
+    browser_watcher: CollectionChannelHealth,
+    browser_history: CollectionChannelHealth,
+    watcher_endpoint: String,
+    watcher_token: String,
+    watcher_source_count: usize,
+    measured_browser_slice_count: i64,
+    measured_browser_seconds: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1494,6 +1573,206 @@ fn get_browser_sources() -> Vec<BrowserSource> {
 }
 
 #[tauri::command]
+fn get_collection_health(state: State<'_, DesktopState>) -> Result<CollectionHealth, String> {
+    let now = now_ms();
+    let service = state_service(&state)?;
+    let settings = service.get_settings().map_err(|error| error.to_string())?;
+    let (measured_browser_slice_count, measured_browser_ms, _) = service
+        .database()
+        .browser_activity_summary(now.saturating_sub(24 * 60 * 60 * 1_000), now)
+        .map_err(|error| error.to_string())?;
+    drop(service);
+
+    let runtime = state
+        .collection_runtime
+        .lock()
+        .map_err(|_| "Collection runtime state is unavailable")?;
+    let watcher = state
+        .browser_watcher
+        .runtime
+        .lock()
+        .map_err(|_| "Browser watcher state is unavailable")?;
+    let desktop = runtime_channel(
+        settings.monitoring_enabled,
+        runtime.last_app_available_at_ms,
+        now,
+        "前台应用身份采集正常",
+        "尚未收到成功的桌面采样",
+    );
+    let idle = runtime_channel(
+        settings.monitoring_enabled,
+        runtime.last_idle_read_at_ms,
+        now,
+        "键盘与鼠标空闲时钟可读取",
+        "尚未读取空闲时钟",
+    );
+    let screen_recording = screen_recording_channel(now);
+    let window_title = if !settings.monitoring_enabled {
+        paused_channel("桌面监测已暂停")
+    } else if screen_recording.status == CollectionChannelStatus::PermissionDenied {
+        CollectionChannelHealth {
+            status: CollectionChannelStatus::PermissionDenied,
+            last_success_at_ms: runtime.last_title_available_at_ms,
+            detail: "未获得屏幕录制权限；应用名仍可采集，但窗口标题可能为空".into(),
+        }
+    } else {
+        runtime_channel(
+            true,
+            runtime.last_title_available_at_ms,
+            now,
+            "窗口标题采集正常",
+            "尚未采集到窗口标题",
+        )
+    };
+    let continuity = if !settings.monitoring_enabled {
+        paused_channel("桌面监测已暂停；恢复后继续记录连续性")
+    } else {
+        CollectionChannelHealth {
+            status: desktop.status,
+            last_success_at_ms: runtime
+                .last_continuity_gap_at_ms
+                .or(runtime.last_persisted_at_ms),
+            detail: runtime
+                .last_continuity_gap_at_ms
+                .map(|_| "已检测并单独记录最近一次采集断档")
+                .unwrap_or("连续性检查运行中；睡眠和采样中断不会计入活跃时间")
+                .into(),
+        }
+    };
+    let watcher_fresh = watcher
+        .last_heartbeat_at_ms
+        .is_some_and(|last| now.saturating_sub(last) <= 90_000);
+    let browser_watcher = if !watcher.listener_ready {
+        CollectionChannelHealth {
+            status: CollectionChannelStatus::Unavailable,
+            last_success_at_ms: watcher.last_persisted_at_ms,
+            detail: watcher
+                .listener_error
+                .clone()
+                .unwrap_or_else(|| "浏览器 watcher 监听器尚未启动".into()),
+        }
+    } else if watcher_fresh {
+        CollectionChannelHealth {
+            status: CollectionChannelStatus::Healthy,
+            last_success_at_ms: watcher
+                .last_persisted_at_ms
+                .or(watcher.last_heartbeat_at_ms),
+            detail: "浏览器扩展心跳正常；时长按相邻心跳区间计量".into(),
+        }
+    } else {
+        CollectionChannelHealth {
+            status: CollectionChannelStatus::Degraded,
+            last_success_at_ms: watcher
+                .last_persisted_at_ms
+                .or(watcher.last_heartbeat_at_ms),
+            detail: "监听器已就绪，等待浏览器扩展连接".into(),
+        }
+    };
+    let available_history_sources = discover_browser_sources()
+        .into_iter()
+        .filter(|source| source.available)
+        .count();
+    let browser_history = CollectionChannelHealth {
+        status: if available_history_sources > 0 {
+            CollectionChannelStatus::Healthy
+        } else {
+            CollectionChannelStatus::Unavailable
+        },
+        last_success_at_ms: runtime.last_browser_history_scan_at_ms,
+        detail: if available_history_sources > 0 {
+            format!("{available_history_sources} 个历史数据库可读；仅作为访问证据，不计停留时长")
+        } else {
+            "未发现可读取的 Chromium 历史数据库".into()
+        },
+    };
+
+    Ok(CollectionHealth {
+        generated_at_ms: now,
+        platform: std::env::consts::OS.into(),
+        monitoring_enabled: settings.monitoring_enabled,
+        desktop,
+        window_title,
+        idle,
+        continuity,
+        screen_recording,
+        browser_watcher,
+        browser_history,
+        watcher_endpoint: BROWSER_WATCHER_ENDPOINT.into(),
+        watcher_token: state.browser_watcher.token.clone(),
+        watcher_source_count: watcher
+            .connected_sources
+            .values()
+            .filter(|observed_at_ms| now.saturating_sub(**observed_at_ms) <= 90_000)
+            .count(),
+        measured_browser_slice_count,
+        measured_browser_seconds: measured_browser_ms / 1_000,
+    })
+}
+
+fn runtime_channel(
+    monitoring_enabled: bool,
+    last_success_at_ms: Option<i64>,
+    now_ms: i64,
+    healthy_detail: &str,
+    missing_detail: &str,
+) -> CollectionChannelHealth {
+    if !monitoring_enabled {
+        return paused_channel("桌面监测已暂停");
+    }
+    match last_success_at_ms {
+        Some(last) if now_ms.saturating_sub(last) <= 20_000 => CollectionChannelHealth {
+            status: CollectionChannelStatus::Healthy,
+            last_success_at_ms: Some(last),
+            detail: healthy_detail.into(),
+        },
+        Some(last) => CollectionChannelHealth {
+            status: CollectionChannelStatus::Degraded,
+            last_success_at_ms: Some(last),
+            detail: "采集信号已超过 20 秒未更新".into(),
+        },
+        None => CollectionChannelHealth {
+            status: CollectionChannelStatus::Degraded,
+            last_success_at_ms: None,
+            detail: missing_detail.into(),
+        },
+    }
+}
+
+fn paused_channel(detail: &str) -> CollectionChannelHealth {
+    CollectionChannelHealth {
+        status: CollectionChannelStatus::Paused,
+        last_success_at_ms: None,
+        detail: detail.into(),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn screen_recording_channel(now_ms: i64) -> CollectionChannelHealth {
+    if screen_recording_permission_granted() {
+        CollectionChannelHealth {
+            status: CollectionChannelStatus::Healthy,
+            last_success_at_ms: Some(now_ms),
+            detail: "屏幕录制权限已授予，可读取窗口标题".into(),
+        }
+    } else {
+        CollectionChannelHealth {
+            status: CollectionChannelStatus::PermissionDenied,
+            last_success_at_ms: None,
+            detail: "需要在系统设置的隐私与安全性中授予屏幕录制权限".into(),
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn screen_recording_channel(now_ms: i64) -> CollectionChannelHealth {
+    CollectionChannelHealth {
+        status: CollectionChannelStatus::Healthy,
+        last_success_at_ms: Some(now_ms),
+        detail: "当前平台不需要 macOS 屏幕录制权限".into(),
+    }
+}
+
+#[tauri::command]
 fn scan_browsers(
     state: State<'_, DesktopState>,
     start_ms: i64,
@@ -2164,7 +2443,13 @@ fn import_legacy_data(
 fn open_data_folder() -> Result<String, String> {
     let data_dir = app_data_dir();
     fs::create_dir_all(&data_dir).map_err(|error| error.to_string())?;
-    std::process::Command::new("explorer.exe")
+    #[cfg(target_os = "windows")]
+    let opener = "explorer.exe";
+    #[cfg(target_os = "macos")]
+    let opener = "open";
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let opener = "xdg-open";
+    std::process::Command::new(opener)
         .arg(&data_dir)
         .spawn()
         .map_err(|error| error.to_string())?;
@@ -2613,13 +2898,17 @@ pub fn run() {
             backup_database_before_1_3_migration(&data_dir)?;
             let database = Database::open(data_dir.join("monitor.db"))?;
             database.quarantine_unavailable_codex_jobs(now_ms())?;
+            let browser_watcher_token = load_or_create_browser_watcher_token(&database)?;
             app.manage(DesktopState {
                 service: Mutex::new(AppService::new(database)),
                 ai_connection_health: AiConnectionHealthServiceState::new(
                     AiConnectionHealth::initial(),
                 ),
+                collection_runtime: Mutex::new(CollectionRuntimeState::default()),
+                browser_watcher: BrowserWatcherServiceState::new(browser_watcher_token),
             });
             start_monitoring_worker(app.handle().clone());
+            start_browser_watcher(app.handle().clone());
             start_browser_worker(app.handle().clone());
             start_ai_worker(app.handle().clone());
             start_ai_connection_health_worker(app.handle().clone());
@@ -2702,6 +2991,7 @@ pub fn run() {
             start_focus_session,
             complete_focus_session,
             get_browser_sources,
+            get_collection_health,
             scan_browsers,
             list_ai_providers,
             save_custom_ai_provider,
@@ -2898,6 +3188,124 @@ fn enqueue_segment_for_ai(
     }
 }
 
+fn load_or_create_browser_watcher_token(
+    database: &Database,
+) -> Result<String, Box<dyn std::error::Error>> {
+    const KEY: &str = "browser_watcher_token_v1";
+    if let Some(value) = database.get_setting_json(KEY)? {
+        if let Ok(token) = serde_json::from_str::<String>(&value) {
+            if token.len() >= 32 {
+                return Ok(token);
+            }
+        }
+    }
+    let entropy = format!(
+        "{}\n{}\n{}\n{:p}",
+        now_ms(),
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default(),
+        database
+    );
+    let token = format!("{:x}", Sha256::digest(entropy.as_bytes()));
+    database.set_setting_json(KEY, &serde_json::to_string(&token)?)?;
+    Ok(token)
+}
+
+fn start_browser_watcher(app: tauri::AppHandle) {
+    let Some(state) = app.try_state::<DesktopState>() else {
+        return;
+    };
+    let token = state.browser_watcher.token.clone();
+    drop(state);
+    let status_app = app.clone();
+    let heartbeat_app = app.clone();
+    std::thread::spawn(move || {
+        run_browser_watcher_server(
+            token,
+            move |ready, error| {
+                if let Some(state) = status_app.try_state::<DesktopState>() {
+                    if let Ok(mut runtime) = state.browser_watcher.runtime.lock() {
+                        runtime.listener_ready = ready;
+                        runtime.listener_error = error;
+                    }
+                }
+                let _ = status_app.emit(
+                    COLLECTION_HEALTH_CHANGED_EVENT,
+                    serde_json::json!({ "observedAtMs": now_ms() }),
+                );
+            },
+            move |heartbeat| process_browser_heartbeat(&heartbeat_app, heartbeat),
+        );
+    });
+}
+
+fn process_browser_heartbeat(
+    app: &tauri::AppHandle,
+    heartbeat: BrowserHeartbeat,
+) -> Result<(), String> {
+    let received_at_ms = now_ms();
+    let source_id = heartbeat.source_id.clone();
+    let active = heartbeat.active && !heartbeat.private;
+    let state = app
+        .try_state::<DesktopState>()
+        .ok_or("Application state is unavailable")?;
+    let settings = state
+        .service
+        .lock()
+        .map_err(|_| "Application service is unavailable")?
+        .get_settings()
+        .map_err(|error| error.to_string())?;
+    if !settings.monitoring_enabled {
+        let mut runtime = state
+            .browser_watcher
+            .runtime
+            .lock()
+            .map_err(|_| "Browser watcher state is unavailable")?;
+        runtime.engine = BrowserWatcherEngine::default();
+        runtime.connected_sources.clear();
+        return Ok(());
+    }
+    let slice = {
+        let mut runtime = state
+            .browser_watcher
+            .runtime
+            .lock()
+            .map_err(|_| "Browser watcher state is unavailable")?;
+        let slice = runtime
+            .engine
+            .ingest(heartbeat, received_at_ms, &settings.excluded_domains)?;
+        runtime.last_heartbeat_at_ms = Some(received_at_ms);
+        if active {
+            runtime
+                .connected_sources
+                .insert(source_id.clone(), received_at_ms);
+        } else {
+            runtime.connected_sources.remove(&source_id);
+        }
+        slice
+    };
+    if let Some(slice) = slice {
+        state
+            .service
+            .lock()
+            .map_err(|_| "Application service is unavailable")?
+            .database()
+            .insert_browser_activity_slice(&slice)
+            .map_err(|error| error.to_string())?;
+        if let Ok(mut runtime) = state.browser_watcher.runtime.lock() {
+            runtime.last_persisted_at_ms = Some(slice.ended_at_ms);
+        }
+    }
+    let _ = app.emit(
+        COLLECTION_HEALTH_CHANGED_EVENT,
+        serde_json::json!({ "observedAtMs": received_at_ms }),
+    );
+    Ok(())
+}
+
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn start_monitoring_worker(app: tauri::AppHandle) {
     std::thread::spawn(move || {
@@ -2916,6 +3324,34 @@ fn start_monitoring_worker(app: tauri::AppHandle) {
                 let idle_threshold_ms = settings.idle_threshold_minutes as i64 * 60_000;
                 engine.set_idle_threshold_ms(idle_threshold_ms);
                 let mut sample = collector.sample();
+                if sample.domain.is_empty() && is_browser_application(&sample.app) {
+                    let watcher_context = app.try_state::<DesktopState>().and_then(|state| {
+                        state
+                            .browser_watcher
+                            .runtime
+                            .lock()
+                            .ok()?
+                            .engine
+                            .current_context(sample.observed_at_ms)
+                    });
+                    if let Some(context) = watcher_context {
+                        sample.domain = context.domain;
+                        if sample.title.is_empty() {
+                            sample.title = context.title;
+                        }
+                    }
+                }
+                if let Some(state) = app.try_state::<DesktopState>() {
+                    if let Ok(mut runtime) = state.collection_runtime.lock() {
+                        runtime.last_idle_read_at_ms = Some(sample.observed_at_ms);
+                        if !sample.app.trim().is_empty() && sample.app != "Unknown" {
+                            runtime.last_app_available_at_ms = Some(sample.observed_at_ms);
+                        }
+                        if !sample.title.trim().is_empty() {
+                            runtime.last_title_available_at_ms = Some(sample.observed_at_ms);
+                        }
+                    }
+                }
                 let idle_seconds = sample
                     .observed_at_ms
                     .saturating_sub(sample.last_input_at_ms)
@@ -2953,7 +3389,7 @@ fn start_monitoring_worker(app: tauri::AppHandle) {
                         }
                         let rules = database.list_manual_rules().unwrap_or_default();
                         engine.set_manual_rules(rules.clone());
-                        if is_browser_app(&sample.app) {
+                        if sample.domain.is_empty() && is_browser_app(&sample.app) {
                             if let Ok(Some((domain, _title))) = database.latest_browser_context(
                                 sample.observed_at_ms.saturating_sub(5 * 60_000),
                                 sample.observed_at_ms,
@@ -2975,6 +3411,9 @@ fn start_monitoring_worker(app: tauri::AppHandle) {
                                 GAP_THRESHOLD_MS,
                             )
                         }) {
+                            if let Ok(mut runtime) = state.collection_runtime.lock() {
+                                runtime.last_continuity_gap_at_ms = Some(sample.observed_at_ms);
+                            }
                             if let Some(previous) = engine.take_current() {
                                 persisted_segments.push(previous);
                             }
@@ -3014,6 +3453,9 @@ fn start_monitoring_worker(app: tauri::AppHandle) {
                             },
                         );
                         if persisted.is_ok() {
+                            if let Ok(mut runtime) = state.collection_runtime.lock() {
+                                runtime.last_persisted_at_ms = Some(sample.observed_at_ms);
+                            }
                             let _ = app.emit(
                                 ACTIVITY_CHANGED_EVENT,
                                 serde_json::json!({
@@ -3120,6 +3562,13 @@ fn start_browser_worker(app: tauri::AppHandle) {
             } else {
                 None
             };
+            if scan.is_some() {
+                if let Some(state) = app.try_state::<DesktopState>() {
+                    if let Ok(mut runtime) = state.collection_runtime.lock() {
+                        runtime.last_browser_history_scan_at_ms = Some(end_ms);
+                    }
+                }
+            }
             if let (Some(runtime), Some(scan)) = (&runtime, scan) {
                 for (visit_id, url, domain, title) in scan.new_visits.into_iter().take(20) {
                     let monitoring_enabled = app

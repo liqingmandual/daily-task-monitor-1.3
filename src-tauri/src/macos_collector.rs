@@ -51,6 +51,7 @@ unsafe extern "C" {
     static kCGWindowOwnerPID: CfStringRef;
 
     fn CGEventSourceSecondsSinceLastEventType(state_id: u32, event_type: u32) -> c_double;
+    fn CGPreflightScreenCaptureAccess() -> bool;
     fn CGWindowListCopyWindowInfo(option: u32, relative_to_window: u32) -> CfArrayRef;
 }
 
@@ -95,6 +96,10 @@ pub fn system_uptime_ms() -> i64 {
         .tv_sec
         .saturating_mul(1_000)
         .saturating_add(value.tv_nsec / 1_000_000)
+}
+
+pub fn screen_recording_permission_granted() -> bool {
+    unsafe { CGPreflightScreenCaptureAccess() }
 }
 
 fn foreground_window() -> Option<(String, String, String)> {
@@ -215,7 +220,7 @@ fn now_ms() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{MacOsCollector, system_uptime_ms};
+    use super::{MacOsCollector, screen_recording_permission_granted, system_uptime_ms};
 
     #[test]
     fn collector_reads_a_foreground_application_and_idle_clock() {
@@ -229,5 +234,10 @@ mod tests {
     #[test]
     fn monotonic_uptime_is_available() {
         assert!(system_uptime_ms() > 0);
+    }
+
+    #[test]
+    fn screen_recording_permission_can_be_queried_without_prompting() {
+        let _ = screen_recording_permission_granted();
     }
 }
