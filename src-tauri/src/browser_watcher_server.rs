@@ -243,7 +243,8 @@ mod tests {
         let body = r#"{"protocolVersion":1,"sourceId":"chrome-test","browser":"chromium","profile":"default","tabId":"7","capturedAtMs":1000,"url":"https://example.com/work","title":"Work","active":true,"private":false}"#;
         let request = format!(
             "POST /v1/heartbeat HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nX-Daily-Task-Monitor-Token: local-token\r\nContent-Length: {}\r\n\r\n{}",
-            body.len(), body
+            body.len(),
+            body
         );
         let received = Arc::new(Mutex::new(Vec::new()));
 
@@ -261,7 +262,8 @@ mod tests {
         let body = r#"{"protocolVersion":1,"sourceId":"chrome-test","browser":"chromium","profile":"default","tabId":"7","capturedAtMs":1000,"url":"https://example.com/work","title":"Work","active":true,"private":false}"#;
         let request = format!(
             "POST /v1/heartbeat HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nX-Daily-Task-Monitor-Token: wrong-token\r\nContent-Length: {}\r\n\r\n{}",
-            body.len(), body
+            body.len(),
+            body
         );
         let received = Arc::new(Mutex::new(Vec::new()));
 

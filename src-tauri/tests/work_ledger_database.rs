@@ -161,7 +161,7 @@ fn migration_is_idempotent_and_preserves_existing_activity_data() {
         connection
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        10
+        11
     );
     assert_eq!(
         table_columns(&connection, "projects"),
@@ -796,7 +796,7 @@ fn v10_upgrade_preserves_a_realistic_445_job_audit_history() {
         connection
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        10
+        11
     );
     drop(connection);
     let _ = std::fs::remove_file(path);

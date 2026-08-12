@@ -7,6 +7,14 @@ import { spawn } from "node:child_process";
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const executableName = process.platform === "win32" ? "cargo.exe" : "cargo";
 const environment = { ...process.env };
+const requiredRuntimeDirectories = [
+  dirname(process.execPath),
+  environment.PNPM_HOME,
+].filter(Boolean);
+environment.PATH = [
+  ...requiredRuntimeDirectories,
+  environment.PATH,
+].filter(Boolean).join(delimiter);
 
 function isExecutable(path) {
   try {

@@ -726,11 +726,8 @@ fn resolve_app_identities(apps: Vec<AppIdentityRequest>) -> Vec<AppIdentityDto> 
             }
 
             let cached = resolve_executable_identity(&executable_path);
-            let display_name = canonical_display_name(
-                &raw_name,
-                &cached.product_name,
-                &executable_path,
-            );
+            let display_name =
+                canonical_display_name(&raw_name, &cached.product_name, &executable_path);
             let icon_data_url = cached
                 .icon_data_url
                 .or_else(|| embedded_product_icon_data_url(&executable_path));
@@ -3050,13 +3047,7 @@ fn show_main_dashboard(app: &tauri::AppHandle) {
 #[cfg(target_os = "macos")]
 fn install_macos_app_menu(app: &mut tauri::App) -> tauri::Result<()> {
     let menu = Menu::default(app.handle())?;
-    let settings = MenuItem::with_id(
-        app,
-        "open-settings",
-        "Settings…",
-        true,
-        Some("CmdOrCtrl+,"),
-    )?;
+    let settings = MenuItem::with_id(app, "open-settings", "Settings…", true, Some("CmdOrCtrl+,"))?;
     let separator = PredefinedMenuItem::separator(app)?;
     if let Some(MenuItemKind::Submenu(app_menu)) = menu.items()?.into_iter().next() {
         if let Some(MenuItemKind::Predefined(about)) = app_menu.items()?.into_iter().next() {
@@ -3106,9 +3097,7 @@ pub fn run() {
                 .separator()
                 .quit()
                 .build()?;
-            let mut tray = TrayIconBuilder::new()
-                .menu(&menu)
-                .tooltip("Orbit");
+            let mut tray = TrayIconBuilder::new().menu(&menu).tooltip("Orbit");
             if let Some(icon) = app.default_window_icon() {
                 tray = tray.icon(icon.clone());
             }
