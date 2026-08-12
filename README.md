@@ -46,30 +46,70 @@ Orbit 1.3 独立版拥有独立的安装标识、数据目录、凭据空间和�
 
 ## 本地开发
 
-需要：
+通用开发环境需要：
 
-- Windows 10/11
 - Node.js 22
 - pnpm 10
 - Rust stable
+
+构建 Windows 安装包还需要：
+
+- Windows 10/11
 - Microsoft C++ Build Tools 与 Windows SDK
 - WebView2 Runtime
 
-安装依赖并运行测试：
+安装锁文件中的依赖：
 
-```powershell
+```shell
 pnpm install --frozen-lockfile
+```
+
+运行前端和 Rust 测试：
+
+```shell
 pnpm test
 cargo test --manifest-path src-tauri/Cargo.toml --all-targets
 ```
 
 启动开发环境：
 
-```powershell
+```shell
 pnpm tauri dev
 ```
 
-构建具有独立身份的 1.3 NSIS 安装包：
+### 构建前端
+
+执行 TypeScript 类型检查并构建 Vite 生产包：
+
+```shell
+pnpm build
+```
+
+前端产物输出到：
+
+```text
+dist/
+```
+
+### 构建 macOS 应用
+
+在 macOS 上生成 `.app` 应用包：
+
+```shell
+pnpm tauri build --bundles app
+```
+
+应用输出到：
+
+```text
+src-tauri/target/release/bundle/macos/Orbit.app
+```
+
+该命令会自动先执行 `pnpm build`，再编译 Rust 后端并打包 macOS 应用。产物架构与当前 Mac 的 Rust 编译目标一致。
+
+### 构建 Windows 独立版安装包
+
+在 Windows PowerShell 中构建具有独立身份的 1.3 NSIS 安装包：
 
 ```powershell
 pnpm run tauri:build:independent-1.3
