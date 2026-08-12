@@ -184,6 +184,8 @@ pub struct AppSettings {
     pub excluded_domains: Vec<String>,
     #[serde(default)]
     pub ui_theme: UiTheme,
+    #[serde(default = "default_ui_font")]
+    pub ui_font: String,
     #[serde(default)]
     pub experimental_knowledge_graph_enabled: bool,
 }
@@ -234,6 +236,28 @@ fn default_codex_executable() -> String {
     "codex".to_string()
 }
 
+fn default_ui_font() -> String {
+    "Ubuntu".to_string()
+}
+
+fn normalize_ui_font(value: &str) -> String {
+    let value = value.trim();
+    let lowercase = value.to_lowercase();
+    [".ttf", ".tff", ".otf", ".ttc", ".dfont"]
+        .iter()
+        .find(|extension| lowercase.ends_with(*extension))
+        .map(|extension| value[..value.len() - extension.len()].trim().to_string())
+        .unwrap_or_else(|| value.to_string())
+}
+
+fn is_valid_ui_font(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty()
+        && !value.starts_with('.')
+        && value.len() <= 120
+        && !value.chars().any(char::is_control)
+}
+
 fn deserialize_optional_nullable_string<'de, D>(
     deserializer: D,
 ) -> std::result::Result<Option<Option<String>>, D::Error>
@@ -282,6 +306,10 @@ impl AppSettings {
             .filter(|provider_id| !provider_id.is_empty());
         self.codex_executable = normalize_codex_executable(self.codex_executable);
         self.codex_model = normalize_codex_model(self.codex_model);
+        self.ui_font = normalize_ui_font(&self.ui_font);
+        if !is_valid_ui_font(&self.ui_font) {
+            self.ui_font = default_ui_font();
+        }
         self
     }
 }
@@ -303,6 +331,7 @@ impl Default for AppSettings {
             excluded_apps: Vec::new(),
             excluded_domains: Vec::new(),
             ui_theme: UiTheme::default(),
+            ui_font: default_ui_font(),
             experimental_knowledge_graph_enabled: false,
         }
     }
@@ -330,6 +359,7 @@ pub struct SettingsPatch {
     pub excluded_apps: Option<Vec<String>>,
     pub excluded_domains: Option<Vec<String>>,
     pub ui_theme: Option<UiTheme>,
+    pub ui_font: Option<String>,
     pub experimental_knowledge_graph_enabled: Option<bool>,
 }
 
@@ -779,6 +809,14 @@ impl AppService {
         }
         if let Some(value) = patch.ui_theme {
             settings.ui_theme = value;
+        }
+        if let Some(value) = patch.ui_font {
+            let value = normalize_ui_font(&value);
+            settings.ui_font = if !is_valid_ui_font(&value) {
+                "Ubuntu".to_string()
+            } else {
+                value
+            };
         }
         if let Some(value) = patch.experimental_knowledge_graph_enabled {
             settings.experimental_knowledge_graph_enabled = value;

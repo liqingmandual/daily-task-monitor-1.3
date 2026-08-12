@@ -688,6 +688,7 @@ fn settings_patch_preserves_unspecified_values() {
             excluded_apps: None,
             excluded_domains: None,
             ui_theme: None,
+            ui_font: None,
             experimental_knowledge_graph_enabled: None,
         })
         .unwrap();

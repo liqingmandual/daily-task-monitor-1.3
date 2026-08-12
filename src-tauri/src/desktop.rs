@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -1057,6 +1058,96 @@ fn get_settings(state: State<'_, DesktopState>) -> Result<AppSettings, String> {
     state_service(&state)?
         .get_settings()
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_system_fonts() -> Result<Vec<String>, String> {
+    let output = if cfg!(target_os = "windows") {
+        Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "[Console]::OutputEncoding=[Text.UTF8Encoding]::new(); (Get-Item 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts').Property",
+            ])
+            .output()
+    } else if cfg!(target_os = "macos") {
+        Command::new("system_profiler")
+            .args(["SPFontsDataType", "-json", "-detailLevel", "mini"])
+            .output()
+    } else {
+        Command::new("fc-list").args([":", "family"]).output()
+    }
+    .map_err(|error| format!("无法读取系统字体：{error}"))?;
+    if !output.status.success() {
+        return Err("系统字体枚举命令执行失败".to_string());
+    }
+
+    let raw = String::from_utf8_lossy(&output.stdout);
+    let mut fonts = HashSet::new();
+    if cfg!(target_os = "macos") {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) {
+            collect_font_families(&value, &mut fonts);
+        }
+    } else if cfg!(target_os = "windows") {
+        for line in raw.lines() {
+            insert_font_family(line, &mut fonts);
+        }
+    } else {
+        for family_group in raw.lines() {
+            for family in family_group.split(',') {
+                insert_font_family(family, &mut fonts);
+            }
+        }
+    }
+    fonts.insert("Ubuntu".to_string());
+    let mut fonts = fonts.into_iter().collect::<Vec<_>>();
+    fonts.sort_by_key(|font| font.to_lowercase());
+    Ok(fonts)
+}
+
+fn insert_font_family(value: &str, fonts: &mut HashSet<String>) {
+    let raw_name = value
+        .split(" (")
+        .next()
+        .unwrap_or(value)
+        .trim()
+        .trim_matches('"');
+    let lowercase = raw_name.to_lowercase();
+    let name = [".ttf", ".tff", ".otf", ".ttc", ".dfont"]
+        .iter()
+        .find(|extension| lowercase.ends_with(*extension))
+        .map(|extension| &raw_name[..raw_name.len() - extension.len()])
+        .unwrap_or(raw_name)
+        .trim();
+    if !name.is_empty()
+        && !name.starts_with('.')
+        && name.len() <= 120
+        && !name.chars().any(char::is_control)
+    {
+        fonts.insert(name.to_string());
+    }
+}
+
+fn collect_font_families(value: &serde_json::Value, fonts: &mut HashSet<String>) {
+    match value {
+        serde_json::Value::Object(object) => {
+            for (key, value) in object {
+                if matches!(key.as_str(), "family" | "family_name" | "_name") {
+                    if let Some(name) = value.as_str() {
+                        insert_font_family(name, fonts);
+                    }
+                }
+                collect_font_families(value, fonts);
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                collect_font_families(value, fonts);
+            }
+        }
+        _ => {}
+    }
 }
 
 #[tauri::command]
@@ -2681,6 +2772,7 @@ pub fn run() {
             get_workflow,
             get_knowledge_graph,
             get_settings,
+            list_system_fonts,
             list_ai_reviews,
             list_pending_ai_jobs,
             resolve_ai_review,

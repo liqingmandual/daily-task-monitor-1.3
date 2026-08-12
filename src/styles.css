@@ -3041,3 +3041,114 @@ main { width: min(1600px, 100%); margin: 0 auto; padding: 20px 24px 48px; }
     width: 32px;
     height: 32px;
   }
+
+/* UI refresh: clearer hierarchy, calmer surfaces and more legible navigation. */
+.app-frame {
+  --font-ui: var(--font-selected, "Ubuntu"), "Noto Sans SC", "Microsoft YaHei UI", sans-serif;
+  --font-mono: "Ubuntu Mono", "Cascadia Mono", "SFMono-Regular", monospace;
+  --panel-radius: 12px;
+  --panel-shadow: 0 1px 2px rgba(22, 34, 53, .035), 0 10px 30px rgba(36, 57, 88, .055);
+  background:
+    radial-gradient(circle at 8% -8%, color-mix(in srgb, var(--primary) 8%, transparent), transparent 28rem),
+    var(--page);
+  font-family: var(--font-ui);
+}
+
+.app-frame { --metric-font: var(--font-ui); --font-time: var(--font-mono); }
+.app-frame code, .app-frame pre, .app-frame time,
+.app-frame .confidence, .app-frame .codex-health dd,
+.app-frame .period-label span, .app-frame .time-bucket > span,
+.app-frame .workflow-color-field span, .app-frame .ai-review-cell.confidence,
+.app-frame .ai-review-time, .app-frame .ai-review-meta-grid dd,
+.app-frame .ai-review-error-meta dd, .app-frame .ai-review-candidates small,
+.app-frame .ai-review-json-editor textarea { font-family: var(--font-mono); }
+
+.font-select-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, 46%); align-items: center; gap: 16px; }
+.font-select-row > span, .font-select-row b, .font-select-row small { display: block; min-width: 0; }
+.font-select-row small { margin-top: 4px; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.font-select-row select { width: 100%; min-width: 0; min-height: 40px; padding: 0 34px 0 10px; color: var(--text); background: var(--surface-subtle); border: 1px solid var(--border); border-radius: 8px; }
+@media (max-width: 520px) { .font-select-row { grid-template-columns: 1fr; gap: 8px; } }
+
+.app-frame .app-header {
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--border) 72%, transparent), 0 8px 24px rgba(29, 44, 68, .035);
+}
+
+.app-frame .brand-mark {
+  border-radius: 11px;
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--primary) 22%, transparent);
+}
+
+.app-frame .main-tabs {
+  gap: 3px;
+  padding: 4px;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  background: color-mix(in srgb, var(--surface-strong) 84%, var(--surface));
+  border-radius: 11px;
+}
+
+.app-frame .main-tabs button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border-radius: 8px;
+  font-weight: 680;
+}
+
+.app-frame .main-tabs button svg { opacity: .72; transition: opacity .18s ease, transform .18s ease; }
+.app-frame .main-tabs button:hover svg { opacity: 1; transform: translateY(-1px); }
+.app-frame .main-tabs button.active svg { opacity: 1; }
+
+.app-frame main { padding-top: 24px; }
+.app-frame .page-heading { align-items: center; margin-bottom: 18px; }
+.app-frame .page-heading h2 { margin-top: 4px; font-size: clamp(22px, 2vw, 28px); font-weight: 720; letter-spacing: -.025em; }
+.app-frame .page-heading p {
+  max-width: min(760px, 58vw);
+  padding: 8px 11px;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 76%, transparent);
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: right;
+}
+
+.app-frame .metric-grid { gap: 12px; margin-bottom: 16px; }
+.app-frame .metric-card {
+  min-height: 108px;
+  padding: 16px 17px;
+  border-color: color-mix(in srgb, var(--border) 84%, transparent);
+}
+.app-frame .metric-card::before { width: 4px; opacity: .9; }
+.app-frame .metric-card::after {
+  content: "";
+  position: absolute;
+  top: -38px;
+  right: -30px;
+  width: 104px;
+  height: 104px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  pointer-events: none;
+}
+.app-frame .metric-card strong { margin-top: 9px; font-size: clamp(22px, 1.6vw, 28px); letter-spacing: -.025em; }
+.app-frame .metric-card.interactive:hover { transform: translateY(-2px); }
+
+.app-frame .panel { border-color: color-mix(in srgb, var(--border) 86%, transparent); }
+.app-frame .panel-heading > i { border-radius: 9px; }
+.app-frame .icon-button { border-radius: 9px; }
+
+@media (max-width: 1180px) {
+  .app-frame .page-heading p { max-width: 56vw; border-radius: 10px; }
+}
+
+@media (max-width: 760px) {
+  .app-frame main { padding-top: 18px; }
+  .app-frame .page-heading { gap: 10px; }
+  .app-frame .page-heading p { max-width: none; padding: 0; border: 0; background: transparent; text-align: left; }
+  .app-frame .main-tabs button { gap: 5px; padding-inline: 7px; font-size: 11px; }
+  .app-frame .main-tabs button svg { width: 14px; height: 14px; }
+  .app-frame .metric-grid { gap: 8px; }
+  .app-frame .metric-card { min-height: 102px; padding: 14px; }
+  .app-frame .metric-card strong { font-size: clamp(19px, 5.4vw, 24px); }
+}
