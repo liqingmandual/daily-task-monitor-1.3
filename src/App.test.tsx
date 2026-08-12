@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import * as aiReviewLib from "./lib/ai-review";
 import { activityDisplayRegistry } from "./lib/activity-composition";
-import type { AiConnectionHealth, AiReviewRecord } from "./lib/desktop";
+import type { AiConnectionHealth, AiReviewRecord, CollectionHealth } from "./lib/desktop";
 import type { Segment } from "./lib/metrics";
 
 type TestWindow = {
@@ -154,6 +154,28 @@ function aiConnectionHealth(overrides: Partial<AiConnectionHealth> = {}): AiConn
   };
 }
 
+function collectionHealth(overrides: Partial<CollectionHealth> = {}): CollectionHealth {
+  const healthy = { status: "healthy" as const, lastSuccessAtMs: 1_752_537_600_000, detail: "采集正常" };
+  return {
+    generatedAtMs: 1_752_537_600_000,
+    platform: "macos",
+    monitoringEnabled: true,
+    desktop: healthy,
+    windowTitle: healthy,
+    idle: healthy,
+    continuity: healthy,
+    screenRecording: healthy,
+    browserWatcher: healthy,
+    browserHistory: healthy,
+    watcherEndpoint: "http://127.0.0.1:27123/v1/heartbeat",
+    watcherToken: "local-test-token",
+    watcherSourceCount: 1,
+    measuredBrowserSliceCount: 4,
+    measuredBrowserSeconds: 120,
+    ...overrides,
+  };
+}
+
 function installDesktopWindow() {
   const { document, window } = parseHTML("<!doctype html><html><body><div id=\"root\"></div></body></html>");
   let activeElement: Element | null = null;
@@ -197,6 +219,7 @@ function installPreviewWindow() {
 function desktopCommandResult(command: string) {
   if (command === "get_settings") return { ...appSettings, aiAutomationNoticeVersion: 1 };
   if (command === "get_ai_connection_health" || command === "refresh_ai_connection_health") return aiConnectionHealth();
+  if (command === "get_collection_health") return collectionHealth();
   if (command === "get_today_dashboard") return {
     timeline: [],
     totals: { monitoredSeconds: 0, activeSeconds: 0, idleSeconds: 0, learningSeconds: 0, categorySeconds: {} },
@@ -234,7 +257,7 @@ describe("App", () => {
       await act(async () => root.render(<App initialSegments={segments} />));
 
       expect(rootElement.querySelector(".app-frame")?.getAttribute("data-header-layout")).toBe("compact");
-      expect(rootElement.querySelectorAll(".main-tabs button")).toHaveLength(4);
+      expect(rootElement.querySelectorAll(".main-tabs button")).toHaveLength(5);
     } finally {
       await act(async () => root.unmount());
     }
@@ -1523,6 +1546,36 @@ describe("App", () => {
       if (threshold) Reflect.deleteProperty(threshold, "value");
       expect(threshold?.value).toBe("10");
       expect(rootElement.textContent).toContain("不活跃阈值保存失败");
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it("shows collection channel diagnostics and local watcher credentials", async () => {
+    const { document, window } = installDesktopWindow();
+    vi.mocked(listen).mockResolvedValue(vi.fn());
+    vi.mocked(invoke).mockImplementation(async (command) => desktopCommandResult(command));
+    const rootElement = document.getElementById("root") as unknown as HTMLDivElement;
+    const root = createRoot(rootElement);
+
+    try {
+      await act(async () => root.render(<App initialSegments={segments} />));
+      const healthTab = [...rootElement.querySelectorAll<HTMLButtonElement>(".main-tabs button")]
+        .find((button) => button.textContent === "健康诊断");
+      await act(async () => healthTab?.dispatchEvent(new window.Event("click", { bubbles: true })));
+      await act(async () => undefined);
+
+      const diagnostics = rootElement.querySelector<HTMLElement>('[aria-label="采集健康诊断"]');
+      expect(diagnostics).not.toBeNull();
+      expect(diagnostics?.textContent).toContain("浏览器实时 watcher");
+      expect(diagnostics?.textContent).toContain("2 分钟");
+      expect(diagnostics?.textContent).toContain("4 个可信心跳切片");
+      expect(rootElement.querySelector<HTMLInputElement>("#browser-watcher-endpoint")?.value)
+        .toBe("http://127.0.0.1:27123/v1/heartbeat");
+      expect(rootElement.querySelector<HTMLInputElement>("#browser-watcher-token")?.value)
+        .toBe("local-test-token");
+      expect(invoke).toHaveBeenCalledWith("get_collection_health");
+      expect(rootElement.querySelector('[role="dialog"][aria-label="设置"]')).toBeNull();
     } finally {
       await act(async () => root.unmount());
     }

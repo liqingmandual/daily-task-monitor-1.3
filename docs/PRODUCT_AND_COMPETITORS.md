@@ -81,12 +81,15 @@ Reference: <https://timingapp.com/help/faq>
 
 ### P0: trustworthy capture
 
-- Keep platform collectors behind one `MonitorSample` contract.
-- Validate macOS app/window/idle collection across sleep and wake.
-- Add a browser watcher protocol and extensions for Chromium, Firefox, and
-  Safari; never present history visits as measured duration.
-- Add permission diagnostics and an explicit collection-health screen.
-- Keep Windows and macOS collector tests green and document local smoke checks.
+- [x] Keep platform collectors behind one `MonitorSample` contract.
+- [x] Validate macOS app/window/idle collection across permission denial,
+  idle, sleep/wake, and offline operation on a real device with the repeatable
+  checklist and database smoke check.
+- [x] Add browser watcher protocol v1 and local extension sources for Chromium,
+  Firefox, and Safari; history visits remain separate from measured duration.
+- [x] Add permission diagnostics and an explicit collection-health screen.
+- [ ] Keep Windows and macOS collector tests green in CI and record the final
+  real-device macOS regression. The two-platform CI matrix is configured.
 
 Signed, notarized macOS packaging is deliberately deferred until a later
 distribution phase.

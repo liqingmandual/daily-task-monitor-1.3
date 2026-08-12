@@ -5,6 +5,9 @@ pub mod ai_executor;
 pub mod ai_review;
 pub mod app;
 pub mod browser;
+pub mod browser_watcher;
+#[cfg(feature = "desktop")]
+pub mod browser_watcher_server;
 pub mod classifier;
 pub mod db;
 pub mod domain;
