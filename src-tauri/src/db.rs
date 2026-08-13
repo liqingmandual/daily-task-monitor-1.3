@@ -5286,12 +5286,21 @@ impl Database {
         start_ms: i64,
         end_ms: i64,
     ) -> Result<WorkLedgerRangeRollup> {
+        let range_facts = self.load_work_ledger_range_facts(start_ms, end_ms)?;
+        self.work_ledger_range_rollup_from_facts(start_ms, end_ms, &range_facts)
+    }
+
+    pub(crate) fn work_ledger_range_rollup_from_facts(
+        &self,
+        start_ms: i64,
+        end_ms: i64,
+        range_facts: &WorkLedgerRangeFacts,
+    ) -> Result<WorkLedgerRangeRollup> {
         if end_ms <= start_ms {
             return Err(rusqlite::Error::InvalidParameterName(
                 "invalid work ledger rollup range".into(),
             ));
         }
-        let range_facts = self.load_work_ledger_range_facts(start_ms, end_ms)?;
 
         let mut projects = BTreeMap::<String, ProjectRangeRollup>::new();
         {

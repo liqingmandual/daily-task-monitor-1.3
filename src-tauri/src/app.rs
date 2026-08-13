@@ -395,10 +395,15 @@ impl AppService {
                     workflow_linked: linked_activity_ids.contains(segment.id.as_str()),
                 }
             }));
+        let work_ledger = self.database.work_ledger_range_rollup_from_facts(
+            start_ms,
+            end_ms,
+            &work_ledger_facts,
+        )?;
         Ok(DashboardSnapshot {
             totals: self.database.dashboard_totals(start_ms, end_ms)?,
             timeline,
-            work_ledger: self.database.work_ledger_range_rollup(start_ms, end_ms)?,
+            work_ledger,
             activity_composition,
         })
     }
