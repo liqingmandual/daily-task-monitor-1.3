@@ -753,6 +753,7 @@ dependencies = [
  "pretty_assertions",
  "reqwest",
  "rfd",
+ "ring",
  "rusqlite",
  "serde",
  "serde_json",

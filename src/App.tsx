@@ -38,6 +38,7 @@ import { CompactFocusControl } from "./components/today/CompactFocusControl";
 import { DailyGoalPanel } from "./components/today/DailyGoalPanel";
 import { DailyMarkdownExportButton } from "./components/today/DailyMarkdownExportButton";
 import { AiAnalysisPanel } from "./components/today/AiAnalysisPanel";
+import { ExternalContextPanel } from "./components/today/ExternalContextPanel";
 import { TrendsView } from "./components/trends/TrendsView";
 import { WorkflowPage } from "./components/workflow/WorkflowPage";
 import { AiReviewPage, previewAiReviewRecords } from "./components/ai-review/AiReviewPage";
@@ -51,6 +52,7 @@ import { buildAiReviewFilter, defaultAiReviewFilters, pendingReviewSubjectIds } 
 import {
   ACTIVITY_SCOPE_STORAGE_KEYS,
   buildFallbackActivityCompositions,
+  displayMetaForActivity,
   getCompositionLearningSeconds,
   parsePersistedActivityScope,
   type ActivityCompositions,
@@ -62,12 +64,18 @@ import {
   dayBounds,
   exportDailyReport,
   finishFocus,
+  exportSyncBundle,
   getAiConnectionHealth,
   getAppSettings,
   getCollectionHealth,
   getCodexHealth,
   getFocusTimerStatus,
+  getSyncStatus,
+  previewClassificationRule,
   importLegacyActivity,
+  importCalendarContext,
+  importProjectContext,
+  importSyncBundle,
   isDesktopRuntime,
   listAiProviders,
   listAiReviews,
@@ -81,6 +89,7 @@ import {
   listenFocusTimerChanged,
   listenWorkflowChanged,
   loadDashboardSnapshot,
+  loadExternalContext,
   loadDailyAnalysis,
   enqueueDailyAnalysis,
   revealDataFolder,
@@ -102,9 +111,12 @@ import {
   type CodexHealthStatus,
   type CollectionChannelHealth,
   type CollectionHealth,
+  type ClassificationRulePreview,
   type DailyGoalRecord,
   type FocusTimerStatus,
+  type ExternalContextItem,
   type ScopedDailyAnalysisResult,
+  type SyncStatus,
   type UiFont,
   type UiTheme,
   type WorkLedgerEvidence,
@@ -491,6 +503,13 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
   const previewReviewsRef = useRef(previewReviews);
   const [pendingReviewSubjects, setPendingReviewSubjects] = useState(() => pendingReviewSubjectIds(previewReviews));
   const [dailyAnalysis, setDailyAnalysis] = useState<ScopedDailyAnalysisResult | null>(null);
+  const [classificationRulePreview, setClassificationRulePreview] = useState<ClassificationRulePreview | null>(null);
+  const [classificationCorrectionPending, setClassificationCorrectionPending] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
+  const [syncPassphrase, setSyncPassphrase] = useState("");
+  const [syncPending, setSyncPending] = useState(false);
+  const [externalContext, setExternalContext] = useState<ExternalContextItem[]>([]);
+  const [contextImportPending, setContextImportPending] = useState(false);
   const appFrameRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLElement>(null);
   const timelineRef = useRef<HTMLElement>(null);
@@ -934,6 +953,16 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
     }
   };
 
+  const refreshExternalContext = async () => {
+    if (!isDesktopRuntime()) return;
+    const { startMs, endMs } = dayBounds(selectedDate);
+    try {
+      setExternalContext(await loadExternalContext(startMs, endMs));
+    } catch (error) {
+      setDesktopMessage(`上下文读取失败：${String(error)}`);
+    }
+  };
+
   const refreshAiReviewMarkers = useCallback(async (resolvedRecord?: AiReviewRecord) => {
     const requestId = ++aiReviewMarkersRequestRef.current;
     if (!isDesktopRuntime()) {
@@ -1227,20 +1256,105 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
     category: ActivityCategory,
     videoPurpose: VideoPurpose,
   ) => {
-    setSegments((items) => items.map((item) => item.id === segmentId
-      ? {
-        ...item,
-        category,
-        videoPurpose: category === "video_input" ? videoPurpose : "unknown",
-        confidence: 1,
-        needsReview: false,
+    if (!isDesktopRuntime()) {
+      setSegments((items) => items.map((item) => item.id === segmentId
+        ? {
+          ...item,
+          category,
+          videoPurpose: category === "video_input" ? videoPurpose : "unknown",
+          confidence: 1,
+          classificationSource: "manual",
+          classificationReason: "User correction",
+          classificationModelVersion: "manual-v1",
+          needsReview: false,
+        }
+        : item));
+      return;
+    }
+    setClassificationCorrectionPending(true);
+    try {
+      const preview = await previewClassificationRule(segmentId, category, videoPurpose);
+      if (!preview) {
+        await classifySegment(segmentId, category, videoPurpose, false);
+        await refreshDashboard();
+        return;
       }
-      : item));
-    if (isDesktopRuntime()) {
-      await classifySegment(segmentId, category, videoPurpose);
-      await refreshDashboard();
+      setClassificationRulePreview(preview);
+    } catch (error) {
+      setDesktopMessage(`分类规则预览失败：${String(error)}`);
+    } finally {
+      setClassificationCorrectionPending(false);
     }
   };
+
+  const applyClassificationCorrection = async (createFutureRule: boolean) => {
+    const preview = classificationRulePreview;
+    if (!preview || classificationCorrectionPending) return;
+    setClassificationCorrectionPending(true);
+    try {
+      await classifySegment(preview.segmentId, preview.category, preview.videoPurpose, createFutureRule);
+      setClassificationRulePreview(null);
+      await refreshDashboard();
+      setDesktopMessage(createFutureRule ? "分类已修正，并保存为未来匹配规则。" : "仅修正了这条活动分类。请重新选择可创建未来规则。");
+    } catch (error) {
+      setDesktopMessage(`分类修正失败：${String(error)}`);
+    } finally {
+      setClassificationCorrectionPending(false);
+    }
+  };
+
+  const exportSync = async () => {
+    if (!isDesktopRuntime() || syncPending) return;
+    setSyncPending(true);
+    try {
+      const path = await exportSyncBundle(syncPassphrase);
+      if (path) setSettingsMessage(syncPassphrase ? `加密同步包已导出：${path}` : `未加密同步包已导出：${path}`);
+      setSyncStatus(await getSyncStatus());
+    } catch (error) {
+      setSettingsMessage(`同步包导出失败：${String(error)}`);
+    } finally {
+      setSyncPassphrase("");
+      setSyncPending(false);
+    }
+  };
+
+  const importSync = async () => {
+    if (!isDesktopRuntime() || syncPending) return;
+    setSyncPending(true);
+    try {
+      const result = await importSyncBundle(syncPassphrase);
+      if (result) {
+        setSettingsMessage(`已从 ${result.sourceDeviceId} 合并 ${result.insertedEventCount}/${result.bundleEventCount} 条事件。`);
+        setWorkflowRefreshKey((value) => value + 1);
+      }
+      setSyncStatus(await getSyncStatus());
+    } catch (error) {
+      setSettingsMessage(`同步包导入失败：${String(error)}`);
+    } finally {
+      setSyncPassphrase("");
+      setSyncPending(false);
+    }
+  };
+
+  const importContext = async (kind: "calendar" | "project") => {
+    if (!isDesktopRuntime() || contextImportPending) return;
+    setContextImportPending(true);
+    try {
+      const count = kind === "calendar" ? await importCalendarContext() : await importProjectContext();
+      if (count !== null) {
+        setSettingsMessage(`已导入 ${count} 条${kind === "calendar" ? "日历" : "项目"}上下文；原始活动仍仅保存在本机。`);
+        await refreshExternalContext();
+      }
+    } catch (error) {
+      setSettingsMessage(`上下文导入失败：${String(error)}`);
+    } finally {
+      setContextImportPending(false);
+    }
+  };
+
+  useEffect(() => {
+    void refreshExternalContext();
+  }, [selectedDate]);
 
   useEffect(() => {
     if (!settingsOpen || !isDesktopRuntime()) return;
@@ -1271,6 +1385,7 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
         window.localStorage.setItem("daily-task-monitor-ui-theme", nextSettings.uiTheme);
       }
     }).catch((error) => setSettingsMessage(String(error)));
+    void getSyncStatus().then(setSyncStatus).catch((error) => setSettingsMessage(`同步状态读取失败：${String(error)}`));
   }, [settingsOpen]);
 
   useEffect(() => {
@@ -1581,6 +1696,8 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
               <MetricCard label="切换频率" value={switchesPerActiveHour === null ? "—" : `${switchesPerActiveHour.toFixed(1)} 次/小时`} note={`共 ${totalSwitches} 次`} accent="#7c3aed" />
             </section>
 
+            <ExternalContextPanel items={externalContext} />
+
             <TodayAnalysisPanels
               metrics={metrics}
               activityCompositions={activityCompositions}
@@ -1643,6 +1760,23 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
           <CollectionHealthPanel health={collectionHealth} />
         </>}
       </main>
+
+      {classificationRulePreview && (
+        <div className="drawer-layer classification-rule-layer" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !classificationCorrectionPending && setClassificationRulePreview(null)}>
+          <section className="classification-rule-dialog" role="dialog" aria-modal="true" aria-labelledby="classification-rule-title">
+            <header><div><span>CLASSIFICATION RULE</span><h2 id="classification-rule-title">预览未来分类规则</h2></div><button className="icon-button" aria-label="关闭分类规则预览" disabled={classificationCorrectionPending} onClick={() => setClassificationRulePreview(null)}><X size={19} /></button></header>
+            <p>当前活动会被修正为“{displayMetaForActivity(classificationRulePreview.category, classificationRulePreview.videoPurpose).label}”。你可以只修正这一条，也可以让完全相同的应用与窗口标题在未来自动匹配。</p>
+            <dl>
+              <div><dt>应用</dt><dd>{classificationRulePreview.app}</dd></div>
+              <div><dt>窗口标题</dt><dd>{classificationRulePreview.title || "无窗口标题"}</dd></div>
+              <div><dt>匹配方式</dt><dd>应用 + 窗口标题完全一致</dd></div>
+              <div><dt>历史参考</dt><dd>本地已有 {classificationRulePreview.historicalMatchCount} 条相同证据；规则不会追溯改写它们</dd></div>
+            </dl>
+            <p className="classification-rule-privacy"><ShieldCheck size={15} />规则只保存在本机 SQLite，不会上传原始活动或窗口标题。</p>
+            <footer><button type="button" className="secondary-action" disabled={classificationCorrectionPending} onClick={() => void applyClassificationCorrection(false)}>仅修正这条</button><button type="button" className="workflow-primary-button" disabled={classificationCorrectionPending} onClick={() => void applyClassificationCorrection(true)}>修正并创建未来规则</button></footer>
+          </section>
+        </div>
+      )}
 
       {aiAutomationNoticeOpen && (
         <div className="drawer-layer ai-notice-layer" role="presentation">
@@ -1758,12 +1892,27 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
               <p className="settings-copy">{browserSources.length ? `${browserSources.filter((item) => item.available).length} 个 Chrome / Edge Profile 可读取` : "正在检查 Chrome / Edge Profile"}</p>
               <button className="wide-button" onClick={() => void scanBrowsers()}>立即扫描</button>
             </SettingsSection>
+            <SettingsSection icon={<CalendarDays size={18} />} title="日历与项目上下文">
+              <p className="settings-copy">导入本地 .ics 日历或 provider-neutral JSON 项目快照。它们只作为计划上下文展示，不会伪装成自动采集的活动事实，也不会上传原始时间线。</p>
+              <div className="sync-actions"><button className="wide-button" disabled={contextImportPending} onClick={() => void importContext("calendar")}>导入 .ics 日历</button><button className="wide-button" disabled={contextImportPending} onClick={() => void importContext("project")}>导入项目 JSON</button></div>
+            </SettingsSection>
             <SettingsSection icon={<ShieldCheck size={18} />} title="隐私排除">
               <label className="settings-field" htmlFor="excluded-apps">不发送给 AI 的应用（每行一个）</label>
               <textarea id="excluded-apps" value={excludedApps} onChange={(event) => setExcludedApps(event.target.value)} placeholder="例如：password-manager" />
               <label className="settings-field" htmlFor="excluded-domains">不采集、不发送的域名（每行一个）</label>
               <textarea id="excluded-domains" value={excludedDomains} onChange={(event) => setExcludedDomains(event.target.value)} placeholder="例如：company.internal" />
               <button className="wide-button" onClick={() => void savePrivacyExclusions()}>保存隐私排除</button>
+            </SettingsSection>
+            <SettingsSection icon={<Network size={18} />} title="跨设备事件同步">
+              <p className="settings-copy">仅同步显式组织事件，不包含原始应用时间线、窗口标题或网页内容。导入采用只追加集合并，重复事件不会再次应用。</p>
+              <dl className="sync-status-grid">
+                <div><dt>本机设备 ID</dt><dd>{syncStatus?.deviceId ?? "正在初始化"}</dd></div>
+                <div><dt>已知设备</dt><dd>{syncStatus?.knownDeviceCount ?? 0}</dd></div>
+                <div><dt>事件数</dt><dd>{syncStatus?.eventCount ?? 0}</dd></div>
+              </dl>
+              <label className="settings-field" htmlFor="sync-passphrase">端到端加密口令（可选，不保存）</label>
+              <input id="sync-passphrase" className="sync-passphrase" type="password" autoComplete="off" value={syncPassphrase} onChange={(event) => setSyncPassphrase(event.target.value)} placeholder="留空将导出可读 JSON" />
+              <div className="sync-actions"><button className="wide-button" disabled={syncPending} onClick={() => void exportSync()}>导出同步包</button><button className="wide-button" disabled={syncPending} onClick={() => void importSync()}>导入并合并</button></div>
             </SettingsSection>
             <SettingsSection icon={<Settings size={18} />} title="高级与校准">
               <DailyMarkdownExportButton date={selectedDate} desktopRuntime={isDesktopRuntime()} exporter={exportDailyReport} onMessage={setSettingsMessage} />

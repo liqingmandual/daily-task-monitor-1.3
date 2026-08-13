@@ -9,6 +9,7 @@ pub mod browser_watcher;
 #[cfg(feature = "desktop")]
 pub mod browser_watcher_server;
 pub mod classifier;
+pub mod context;
 pub mod db;
 pub mod domain;
 pub mod edition;
@@ -19,6 +20,7 @@ pub mod monitor;
 pub mod monitor_continuity;
 pub mod report;
 pub mod segment_overlap;
+pub mod sync;
 pub mod trend_analysis;
 pub mod trends;
 pub mod work_ledger;

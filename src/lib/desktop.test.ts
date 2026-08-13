@@ -18,6 +18,13 @@ import {
   completeFocus,
   confirmDailyGoalTask,
   classifySegment,
+  previewClassificationRule,
+  exportSyncBundle,
+  getSyncStatus,
+  importSyncBundle,
+  importCalendarContext,
+  importProjectContext,
+  loadExternalContext,
   getAiConnectionHealth,
   getCodexHealth,
   getCollectionHealth,
@@ -94,6 +101,25 @@ describe("desktop bridge", () => {
     const eventHandler = vi.mocked(listen).mock.calls[0][1];
     eventHandler({ payload: undefined } as never);
     expect(onChanged).toHaveBeenCalledOnce();
+  });
+
+  it("uses local calendar and project context command contracts", async () => {
+    const context = [{ id: "context-1", kind: "calendar_event" }];
+    vi.mocked(invoke)
+      .mockResolvedValueOnce(2)
+      .mockResolvedValueOnce(3)
+      .mockResolvedValueOnce(context);
+
+    await expect(importCalendarContext()).resolves.toBe(2);
+    await expect(importProjectContext()).resolves.toBe(3);
+    await expect(loadExternalContext(1_000, 2_000)).resolves.toBe(context);
+
+    expect(invoke).toHaveBeenNthCalledWith(1, "import_calendar_context");
+    expect(invoke).toHaveBeenNthCalledWith(2, "import_project_context");
+    expect(invoke).toHaveBeenNthCalledWith(3, "get_external_context", {
+      startMs: 1_000,
+      endMs: 2_000,
+    });
   });
 
   it("listens for the native settings menu event", async () => {
@@ -313,6 +339,7 @@ describe("desktop bridge", () => {
         category: "video_input",
         videoPurpose: "learning",
         reason: "User correction",
+        createFutureRule: false,
       },
     });
   });
@@ -328,8 +355,50 @@ describe("desktop bridge", () => {
         category: "creation_development",
         videoPurpose: "unknown",
         reason: "User correction",
+        createFutureRule: false,
       },
     });
+  });
+
+  it("previews an exact future rule before applying it", async () => {
+    const preview = {
+      segmentId: "code-one",
+      matcherKind: "app_title" as const,
+      app: "Code",
+      title: "Orbit",
+      category: "creation_development" as const,
+      videoPurpose: "unknown" as const,
+      historicalMatchCount: 3,
+      appliesToFutureMatchesOnly: true,
+    };
+    vi.mocked(invoke).mockResolvedValueOnce(preview);
+
+    await expect(previewClassificationRule("code-one", "creation_development")).resolves.toBe(preview);
+    expect(invoke).toHaveBeenCalledWith("preview_manual_classification_rule", {
+      request: {
+        segmentId: "code-one",
+        category: "creation_development",
+        videoPurpose: "unknown",
+        reason: "User correction",
+        createFutureRule: false,
+      },
+    });
+  });
+
+  it("uses explicit local bundle commands for optional encrypted sync", async () => {
+    const status = { deviceId: "device-a", knownDeviceCount: 2, eventCount: 3, lastEventAtMs: 10, encryptionAvailable: true };
+    const imported = { insertedEventCount: 1, bundleEventCount: 2, sourceDeviceId: "device-b", path: "/tmp/orbit-sync.orbit-sync" };
+    vi.mocked(invoke)
+      .mockResolvedValueOnce(status)
+      .mockResolvedValueOnce("/tmp/orbit-sync.orbit-sync")
+      .mockResolvedValueOnce(imported);
+
+    await expect(getSyncStatus()).resolves.toBe(status);
+    await expect(exportSyncBundle("secret")).resolves.toBe("/tmp/orbit-sync.orbit-sync");
+    await expect(importSyncBundle("secret")).resolves.toBe(imported);
+    expect(invoke).toHaveBeenNthCalledWith(1, "get_sync_status");
+    expect(invoke).toHaveBeenNthCalledWith(2, "export_sync_bundle", { passphrase: "secret" });
+    expect(invoke).toHaveBeenNthCalledWith(3, "import_sync_bundle", { passphrase: "secret" });
   });
 
   it("loads and patches the AI execution settings with exact camelCase fields", async () => {

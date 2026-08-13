@@ -72,6 +72,19 @@ pub struct DailyAnalysisApp {
     pub seconds: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClassificationRulePreview {
+    pub segment_id: String,
+    pub matcher_kind: String,
+    pub app: String,
+    pub title: String,
+    pub category: ActivityCategory,
+    pub video_purpose: VideoPurpose,
+    pub historical_match_count: i64,
+    pub applies_to_future_matches_only: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DailyAnalysisResult {
@@ -834,6 +847,7 @@ impl AppService {
         category: ActivityCategory,
         video_purpose: VideoPurpose,
         reason: &str,
+        create_future_rule: bool,
     ) -> Result<bool> {
         let changed = self.database.save_manual_classification(
             segment_id,
@@ -842,18 +856,60 @@ impl AppService {
             reason,
         )?;
         if changed {
-            let now_ms = std::time::SystemTime::now()
+            let observed_at_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis() as i64;
-            self.database.save_manual_rule_for_segment(
+            if create_future_rule {
+                self.database.save_manual_rule_for_segment(
+                    segment_id,
+                    category,
+                    video_purpose,
+                    observed_at_ms,
+                )?;
+            }
+            let payload = serde_json::json!({
+                "category": category,
+                "videoPurpose": if category == ActivityCategory::VideoInput {
+                    video_purpose
+                } else {
+                    VideoPurpose::Unknown
+                },
+                "reason": reason,
+                "createFutureRule": create_future_rule,
+            });
+            self.database.append_local_sync_event(
+                observed_at_ms,
+                "classification_correction",
                 segment_id,
-                category,
-                video_purpose,
-                now_ms,
+                "apply",
+                &payload.to_string(),
             )?;
         }
         Ok(changed)
+    }
+
+    pub fn preview_manual_classification_rule(
+        &self,
+        segment_id: &str,
+        category: ActivityCategory,
+        video_purpose: VideoPurpose,
+    ) -> Result<Option<ClassificationRulePreview>> {
+        Ok(self
+            .database
+            .classification_rule_context_for_segment(segment_id)?
+            .map(
+                |(app, title, historical_match_count)| ClassificationRulePreview {
+                    segment_id: segment_id.to_string(),
+                    matcher_kind: "app_title".to_string(),
+                    app,
+                    title,
+                    category,
+                    video_purpose,
+                    historical_match_count,
+                    applies_to_future_matches_only: true,
+                },
+            ))
     }
 
     pub fn database(&self) -> &Database {

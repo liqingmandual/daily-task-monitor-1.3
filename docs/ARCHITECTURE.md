@@ -11,6 +11,8 @@
 - `src-tauri/src/db.rs`：SQLite migration 与持久化。
 - `src-tauri/src/segment_overlap.rs`：跨平台权威时间线与重叠片段归一化。
 - `src-tauri/src/desktop.rs`：Tauri 命令、托盘、后台 worker 与凭据库边界。
+- `src-tauri/src/sync.rs`：只追加事件协议、确定性合并和可选端到端加密信封。
+- `src-tauri/src/context.rs`：本地 ICS 与 provider-neutral 项目上下文解析。
 
 ## 分类优先级
 
@@ -42,10 +44,16 @@
 `ai_jobs`；同一稳定对象尚未执行的作业会用最新 payload 和 evidence snapshot
 原地更新，显式重跑才创建新 generation。活动分类只在片段结束后入队，避免
 进行中片段每 5 秒生成一次任务。后台 worker 不再把旧的
-`aiBackfillEnabled` 兼容字段当作三个自动化开关的总开关。v14 migration 会
+`aiBackfillEnabled` 兼容字段当作三个自动化开关的总开关。v16 migration 会
 删除旧版本遗留、从未尝试且可由本地证据重新生成的分类、日报和工作流作业，
-完成记录、失败审计和未知扩展类型不受影响；v15 会尝试执行一次 SQLite
+完成记录、失败审计和未知扩展类型不受影响；v17 会尝试执行一次 SQLite
 压缩，若被并行只读界面占锁，空闲页仍会由后续写入自动复用。
+
+## P1 可解释层与组织同步
+
+活动详情把原始事实、确定性派生统计、分类推断和建议分开呈现；人工分类先预览精确匹配范围，再由用户决定是否创建未来规则。组织同步使用带稳定设备/事件 ID 的只追加事件集合，导入时验证哈希并确定性选择每个项目/任务的最后事件。可选加密使用 PBKDF2-HMAC-SHA256 与 AES-256-GCM。原始活动片段不会进入同步包。
+
+外部日历与项目快照存放于 `external_context_sources` 和 `external_context_items`。它们是本地计划上下文，不参与活动时长计算；同一来源的再次导入按快照替换。协议细节和隐私边界见 `docs/P1_EXPLAINABILITY_AND_SYNC.md`。
 
 ## Today 分析工作台
 

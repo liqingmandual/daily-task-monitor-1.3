@@ -62,6 +62,49 @@ export interface BackendSegment {
   inactivityReason?: InactivityReason | null;
 }
 
+export interface ClassificationRulePreview {
+  segmentId: string;
+  matcherKind: "app_title";
+  app: string;
+  title: string;
+  category: ActivityCategory;
+  videoPurpose: VideoPurpose;
+  historicalMatchCount: number;
+  appliesToFutureMatchesOnly: boolean;
+}
+
+export interface SyncStatus {
+  deviceId: string;
+  knownDeviceCount: number;
+  eventCount: number;
+  lastEventAtMs: number | null;
+  encryptionAvailable: boolean;
+}
+
+export interface SyncImportResult {
+  insertedEventCount: number;
+  bundleEventCount: number;
+  sourceDeviceId: string;
+  path: string;
+}
+
+export type ExternalContextKind = "calendar_event" | "project" | "task";
+
+export interface ExternalContextItem {
+  id: string;
+  sourceId: string;
+  sourceName: string;
+  sourceKind: string;
+  externalId: string;
+  kind: ExternalContextKind;
+  title: string;
+  startAtMs: number | null;
+  endAtMs: number | null;
+  projectName: string;
+  status: string;
+  importedAtMs: number;
+}
+
 export interface DashboardSnapshot {
   timeline: BackendSegment[];
   totals: {
@@ -1189,6 +1232,9 @@ export function toUiSegments(
     category: record.category,
     videoPurpose: record.videoPurpose,
     confidence: record.confidence,
+    classificationSource: record.source,
+    classificationReason: record.reason,
+    classificationModelVersion: record.modelVersion,
     needsReview: record.needsReview,
     inactivityReason: record.inactivityReason ?? null,
   }));
@@ -1243,6 +1289,7 @@ export async function classifySegment(
   segmentId: string,
   category: ActivityCategory,
   videoPurpose: VideoPurpose = "unknown",
+  createFutureRule = false,
 ): Promise<void> {
   await invoke("save_manual_classification", {
     request: {
@@ -1250,8 +1297,49 @@ export async function classifySegment(
       category,
       videoPurpose: category === "video_input" ? videoPurpose : "unknown",
       reason: "User correction",
+      createFutureRule,
     },
   });
+}
+
+export async function previewClassificationRule(
+  segmentId: string,
+  category: ActivityCategory,
+  videoPurpose: VideoPurpose = "unknown",
+): Promise<ClassificationRulePreview | null> {
+  return invoke<ClassificationRulePreview | null>("preview_manual_classification_rule", {
+    request: {
+      segmentId,
+      category,
+      videoPurpose: category === "video_input" ? videoPurpose : "unknown",
+      reason: "User correction",
+      createFutureRule: false,
+    },
+  });
+}
+
+export async function getSyncStatus(): Promise<SyncStatus> {
+  return invoke<SyncStatus>("get_sync_status");
+}
+
+export async function exportSyncBundle(passphrase: string): Promise<string | null> {
+  return invoke<string | null>("export_sync_bundle", { passphrase });
+}
+
+export async function importSyncBundle(passphrase: string): Promise<SyncImportResult | null> {
+  return invoke<SyncImportResult | null>("import_sync_bundle", { passphrase });
+}
+
+export async function importCalendarContext(): Promise<number | null> {
+  return invoke<number | null>("import_calendar_context");
+}
+
+export async function importProjectContext(): Promise<number | null> {
+  return invoke<number | null>("import_project_context");
+}
+
+export async function loadExternalContext(startMs: number, endMs: number): Promise<ExternalContextItem[]> {
+  return (await invoke<ExternalContextItem[] | null>("get_external_context", { startMs, endMs })) ?? [];
 }
 
 export async function beginFocus(

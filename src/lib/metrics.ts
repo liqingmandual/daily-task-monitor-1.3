@@ -20,6 +20,7 @@ export type ActivityDisplayKey =
 
 export type VideoPurpose = "learning" | "leisure" | "unknown";
 export type InactivityReason = "input_idle" | "continuity_gap" | "legacy_gap_repair";
+export type ClassificationSource = "manual" | "idle" | "rule" | "behavior" | "ai" | "pending";
 
 export interface Segment {
   id: string;
@@ -31,6 +32,9 @@ export interface Segment {
   category: ActivityCategory;
   videoPurpose: VideoPurpose;
   confidence: number;
+  classificationSource?: ClassificationSource;
+  classificationReason?: string;
+  classificationModelVersion?: string;
   needsReview: boolean;
   inactivityReason?: InactivityReason | null;
 }

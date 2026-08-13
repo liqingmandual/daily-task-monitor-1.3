@@ -47,13 +47,14 @@ use crate::ai_executor::{
 };
 use crate::ai_review::{AiReviewFilter, AiReviewRecord, AiReviewResolution};
 use crate::app::{
-    AppService, AppSettings, DailyAnalysisResult, DashboardSnapshot, EvidenceBasedFinding,
-    SettingsPatch, TrendAnalysisJobPayload, TrendAnalysisResult, UiTheme, render_daily_markdown,
-    render_trend_markdown_with_workbench, trend_analysis_allowed_candidates,
+    AppService, AppSettings, ClassificationRulePreview, DailyAnalysisResult, DashboardSnapshot,
+    EvidenceBasedFinding, SettingsPatch, TrendAnalysisJobPayload, TrendAnalysisResult, UiTheme,
+    render_daily_markdown, render_trend_markdown_with_workbench, trend_analysis_allowed_candidates,
 };
 use crate::browser::{fetch_public_html_summary, redact_url_for_storage, scan_chromium_history};
 use crate::browser_watcher::{BrowserHeartbeat, BrowserWatcherEngine, is_browser_application};
 use crate::browser_watcher_server::{BROWSER_WATCHER_ENDPOINT, run_browser_watcher_server};
+use crate::context::{ExternalContextItem, parse_ics_calendar, parse_project_context_json};
 use crate::db::{
     ActivitySampleWrite, ActivitySegmentRecord, DailyGoalRecord, Database, FocusSessionRecord,
     MonitoringContinuityCheckpoint,
@@ -70,6 +71,9 @@ use crate::monitor::MonitorEngine;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use crate::monitor_continuity::{continuity_gap_segment, monitoring_gap_from_checkpoint};
 use crate::report::{ReportBlock, ReportDocument, render_docx, render_markdown};
+use crate::sync::{
+    SyncImportResult, SyncStatus, decode_sync_bundle, encode_sync_bundle, make_sync_bundle,
+};
 use crate::trend_analysis::{
     TrendResearchAnalysis, TrendResearchJobPayload, parse_trend_research_response,
     trend_research_protocol_prompt,
@@ -564,6 +568,8 @@ pub struct ManualClassificationRequest {
     pub video_purpose: VideoPurpose,
     #[serde(default)]
     pub reason: String,
+    #[serde(default)]
+    pub create_future_rule: bool,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -700,7 +706,15 @@ fn save_work_ledger_project(
     state: State<'_, DesktopState>,
     request: ProjectSaveRequest,
 ) -> Result<Project, String> {
-    command_save_work_ledger_project(state, request)
+    let project = command_save_work_ledger_project(state.clone(), request)?;
+    append_organization_sync_event(
+        state_service(&state)?.database(),
+        "project",
+        &project.id,
+        project.updated_at_ms,
+        &project,
+    )?;
+    Ok(project)
 }
 
 #[tauri::command]
@@ -708,7 +722,24 @@ fn archive_work_ledger_project(
     state: State<'_, DesktopState>,
     project_id: String,
 ) -> Result<bool, String> {
-    command_archive_work_ledger_project(state, project_id)
+    let changed = command_archive_work_ledger_project(state.clone(), project_id.clone())?;
+    if changed {
+        let service = state_service(&state)?;
+        let ledger = WorkLedgerService::new(WorkLedgerRepository::new(service.database()));
+        if let Some(project) = ledger
+            .get_project(&project_id)
+            .map_err(|error| error.to_string())?
+        {
+            append_organization_sync_event(
+                service.database(),
+                "project",
+                &project.id,
+                project.updated_at_ms,
+                &project,
+            )?;
+        }
+    }
+    Ok(changed)
 }
 
 #[tauri::command]
@@ -716,7 +747,15 @@ fn save_work_ledger_task(
     state: State<'_, DesktopState>,
     request: TaskSaveRequest,
 ) -> Result<Task, String> {
-    command_save_work_ledger_task(state, request)
+    let task = command_save_work_ledger_task(state.clone(), request)?;
+    append_organization_sync_event(
+        state_service(&state)?.database(),
+        "task",
+        &task.id,
+        task.updated_at_ms,
+        &task,
+    )?;
+    Ok(task)
 }
 
 #[tauri::command]
@@ -724,7 +763,29 @@ fn update_work_ledger_task_status(
     state: State<'_, DesktopState>,
     request: TaskStatusUpdateRequest,
 ) -> Result<Task, String> {
-    command_update_work_ledger_task_status(state, request)
+    let task = command_update_work_ledger_task_status(state.clone(), request)?;
+    append_organization_sync_event(
+        state_service(&state)?.database(),
+        "task",
+        &task.id,
+        task.updated_at_ms,
+        &task,
+    )?;
+    Ok(task)
+}
+
+fn append_organization_sync_event<T: Serialize>(
+    database: &Database,
+    entity_kind: &str,
+    entity_id: &str,
+    occurred_at_ms: i64,
+    value: &T,
+) -> Result<(), String> {
+    let payload = serde_json::to_string(value).map_err(|error| error.to_string())?;
+    database
+        .append_local_sync_event(occurred_at_ms, entity_kind, entity_id, "upsert", &payload)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1614,7 +1675,155 @@ fn save_manual_classification(
             request.category,
             request.video_purpose,
             reason,
+            request.create_future_rule,
         )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn preview_manual_classification_rule(
+    state: State<'_, DesktopState>,
+    request: ManualClassificationRequest,
+) -> Result<Option<ClassificationRulePreview>, String> {
+    state_service(&state)?
+        .preview_manual_classification_rule(
+            &request.segment_id,
+            request.category,
+            request.video_purpose,
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_sync_status(state: State<'_, DesktopState>) -> Result<SyncStatus, String> {
+    state_service(&state)?
+        .database()
+        .sync_status(now_ms())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn export_sync_bundle(
+    state: State<'_, DesktopState>,
+    passphrase: String,
+) -> Result<Option<String>, String> {
+    let bytes = {
+        let service = state_service(&state)?;
+        service
+            .database()
+            .ensure_organization_sync_snapshot()
+            .map_err(|error| error.to_string())?;
+        let device_id = service
+            .database()
+            .local_sync_device_id(now_ms())
+            .map_err(|error| error.to_string())?;
+        let events = service
+            .database()
+            .list_sync_events()
+            .map_err(|error| error.to_string())?;
+        let bundle = make_sync_bundle(device_id, now_ms(), events)?;
+        encode_sync_bundle(
+            &bundle,
+            (!passphrase.is_empty()).then_some(passphrase.as_str()),
+        )?
+    };
+    let extension = if passphrase.is_empty() {
+        "json"
+    } else {
+        "orbit-sync"
+    };
+    let Some(output) = rfd::FileDialog::new()
+        .add_filter("Orbit 同步包", &[extension])
+        .set_file_name(&format!("orbit-sync.{extension}"))
+        .save_file()
+    else {
+        return Ok(None);
+    };
+    fs::write(&output, bytes).map_err(|error| error.to_string())?;
+    Ok(Some(output.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
+fn import_sync_bundle(
+    state: State<'_, DesktopState>,
+    passphrase: String,
+) -> Result<Option<SyncImportResult>, String> {
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter("Orbit 同步包", &["orbit-sync", "json"])
+        .pick_file()
+    else {
+        return Ok(None);
+    };
+    let bytes = fs::read(&path).map_err(|error| error.to_string())?;
+    let bundle = decode_sync_bundle(
+        &bytes,
+        (!passphrase.is_empty()).then_some(passphrase.as_str()),
+    )?;
+    let bundle_event_count = bundle.events.len();
+    let source_device_id = bundle.source_device_id.clone();
+    let inserted_event_count = state_service(&state)?
+        .database()
+        .import_sync_events(bundle.events, now_ms())
+        .map_err(|error| error.to_string())?;
+    Ok(Some(SyncImportResult {
+        inserted_event_count,
+        bundle_event_count,
+        source_device_id,
+        path: path.to_string_lossy().into_owned(),
+    }))
+}
+
+#[tauri::command]
+fn import_calendar_context(state: State<'_, DesktopState>) -> Result<Option<usize>, String> {
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter("iCalendar", &["ics"])
+        .pick_file()
+    else {
+        return Ok(None);
+    };
+    let contents = fs::read_to_string(&path).map_err(|error| error.to_string())?;
+    let source_name = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("Calendar");
+    // Persist a stable opaque identifier, never the user's local file path.
+    let source_hash = format!("{:x}", Sha256::digest(path.to_string_lossy().as_bytes()));
+    let source_id = format!("ics-{}", &source_hash[..16]);
+    let import = parse_ics_calendar(&source_id, source_name, &contents, now_ms())?;
+    state_service(&state)?
+        .database()
+        .import_external_context(&import)
+        .map(Some)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn import_project_context(state: State<'_, DesktopState>) -> Result<Option<usize>, String> {
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter("Orbit 项目上下文", &["json"])
+        .pick_file()
+    else {
+        return Ok(None);
+    };
+    let contents = fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let import = parse_project_context_json(&contents, now_ms())?;
+    state_service(&state)?
+        .database()
+        .import_external_context(&import)
+        .map(Some)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_external_context(
+    state: State<'_, DesktopState>,
+    start_ms: i64,
+    end_ms: i64,
+) -> Result<Vec<ExternalContextItem>, String> {
+    state_service(&state)?
+        .database()
+        .list_external_context(start_ms, end_ms)
         .map_err(|error| error.to_string())
 }
 
@@ -3542,6 +3751,13 @@ pub fn run() {
             update_settings,
             set_monitoring_state,
             save_manual_classification,
+            preview_manual_classification_rule,
+            get_sync_status,
+            export_sync_bundle,
+            import_sync_bundle,
+            import_calendar_context,
+            import_project_context,
+            get_external_context,
             queue_segment_classification,
             save_daily_goal,
             get_daily_goal,

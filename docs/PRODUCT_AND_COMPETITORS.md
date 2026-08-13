@@ -114,13 +114,17 @@ distribution phase.
 
 ### P1: explainable organization and sync
 
-- Show facts, derived aggregates, classification inference, and suggestions as
+- [x] Show facts, derived aggregates, classification inference, and suggestions as
   separate layers with evidence and confidence.
-- Turn accepted manual corrections into previewable rules.
-- Synchronize append-only device events with stable device/event IDs,
+- [x] Turn accepted manual corrections into previewable rules.
+- [x] Synchronize append-only device events with stable device/event IDs,
   deterministic merging, and optional end-to-end encrypted storage.
-- Add calendar and project-system context without silently sharing raw personal
+- [x] Add calendar and project-system context without silently sharing raw personal
   activity.
+
+The implementation contract, privacy boundary, portable import formats, and
+current file-transport limitation are documented in
+`docs/P1_EXPLAINABILITY_AND_SYNC.md`.
 
 ### P2: behavior assistance and commercial workflows
 

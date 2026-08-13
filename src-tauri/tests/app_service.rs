@@ -1123,6 +1123,7 @@ fn manual_learning_video_rule_preserves_its_video_purpose() {
             ActivityCategory::VideoInput,
             VideoPurpose::Learning,
             "Course video",
+            true,
         )
         .unwrap();
 
@@ -1154,6 +1155,7 @@ fn manual_classification_overrides_the_segment_and_marks_manual_source() {
             ActivityCategory::Research,
             VideoPurpose::Unknown,
             "User correction",
+            true,
         )
         .unwrap();
 
@@ -1174,6 +1176,72 @@ fn manual_classification_overrides_the_segment_and_marks_manual_source() {
     });
     assert_eq!(reapplied.category, ActivityCategory::Research);
     assert_eq!(reapplied.source, ClassificationSource::Manual);
+}
+
+#[test]
+fn manual_classification_rule_is_previewed_and_requires_explicit_acceptance() {
+    let database = Database::open_in_memory().unwrap();
+    database
+        .insert_segment(&segment(
+            "preview-one",
+            ActivityCategory::Pending,
+            1_000,
+            61_000,
+        ))
+        .unwrap();
+    database
+        .insert_segment(&segment(
+            "preview-two",
+            ActivityCategory::Pending,
+            62_000,
+            122_000,
+        ))
+        .unwrap();
+    let service = AppService::new(database);
+
+    let preview = service
+        .preview_manual_classification_rule(
+            "preview-one",
+            ActivityCategory::Research,
+            VideoPurpose::Unknown,
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(preview.matcher_kind, "app_title");
+    assert_eq!(preview.app, "Codex");
+    assert_eq!(preview.title, "Desktop rewrite");
+    assert_eq!(preview.historical_match_count, 2);
+    assert!(preview.applies_to_future_matches_only);
+
+    service
+        .save_manual_classification(
+            "preview-one",
+            ActivityCategory::Research,
+            VideoPurpose::Unknown,
+            "User correction",
+            false,
+        )
+        .unwrap();
+    assert!(service.database().list_manual_rules().unwrap().is_empty());
+    let current = service.get_dashboard(0, 130_000).unwrap();
+    assert_eq!(
+        current
+            .timeline
+            .iter()
+            .find(|segment| segment.id == "preview-one")
+            .unwrap()
+            .category,
+        ActivityCategory::Research
+    );
+    assert_eq!(
+        current
+            .timeline
+            .iter()
+            .find(|segment| segment.id == "preview-two")
+            .unwrap()
+            .category,
+        ActivityCategory::Pending
+    );
 }
 
 #[test]

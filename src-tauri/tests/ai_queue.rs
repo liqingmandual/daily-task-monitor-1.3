@@ -481,8 +481,8 @@ fn stable_subject_key_deduplicates_a_growing_live_segment() {
 }
 
 #[test]
-fn v14_migration_discards_only_unattempted_regenerable_ai_backlog() {
-    let path = queue_test_path("v14-ai-backlog-cleanup");
+fn v16_migration_discards_only_unattempted_regenerable_ai_backlog() {
+    let path = queue_test_path("v16-ai-backlog-cleanup");
     let db = Database::open(&path).unwrap();
     let execution = snapshot(AiExecutionMode::ApiKey, "openai", "gpt-test", "hash", 1_000);
     let derived = db
@@ -504,7 +504,7 @@ fn v14_migration_discards_only_unattempted_regenerable_ai_backlog() {
         )
         .unwrap();
     connection
-        .execute_batch("PRAGMA user_version = 13;")
+        .execute_batch("PRAGMA user_version = 15;")
         .unwrap();
     drop(connection);
 

@@ -17,11 +17,16 @@ use crate::ai_review::{
 use crate::browser::BrowserVisit;
 use crate::browser_watcher::BrowserActivitySlice;
 use crate::classifier::{AiDisposition, ManualRule, decide_ai_disposition};
+use crate::context::{ExternalContextImport, ExternalContextItem, ExternalContextKind};
 use crate::domain::{
     ActivityCategory, ActivityScope, AiClassificationReviewValue, AiWorkflowAssignmentReviewValue,
     ClassificationSource, InactivityReason, VideoPurpose,
 };
 use crate::segment_overlap::canonicalize_activity_segments;
+use crate::sync::{
+    SyncEvent, SyncStatus, build_sync_event, latest_entity_events, merge_sync_events,
+    random_device_id,
+};
 use crate::trend_analysis::{ResearchStatus, TrendResearchAnalysis, TrendResearchFinding};
 use crate::work_ledger::{
     AiTaskCancellation, AiWorkLedgerSuggestion, ConfirmedDailyGoalTask, DailyGoalTaskLink,
@@ -1592,6 +1597,72 @@ impl Database {
             self.connection.execute_batch(
                 "
                 BEGIN IMMEDIATE;
+                CREATE TABLE IF NOT EXISTS sync_devices (
+                    device_id TEXT PRIMARY KEY,
+                    display_name TEXT NOT NULL DEFAULT '',
+                    created_at_ms INTEGER NOT NULL,
+                    last_seen_at_ms INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS sync_events (
+                    event_id TEXT PRIMARY KEY,
+                    device_id TEXT NOT NULL,
+                    sequence INTEGER NOT NULL CHECK(sequence >= 1),
+                    occurred_at_ms INTEGER NOT NULL,
+                    entity_kind TEXT NOT NULL,
+                    entity_id TEXT NOT NULL,
+                    operation TEXT NOT NULL,
+                    payload_json TEXT NOT NULL CHECK(json_valid(payload_json)),
+                    payload_hash TEXT NOT NULL,
+                    imported_at_ms INTEGER NOT NULL,
+                    UNIQUE(device_id, sequence)
+                );
+                CREATE INDEX IF NOT EXISTS idx_sync_events_order
+                    ON sync_events(occurred_at_ms, device_id, sequence, event_id);
+                CREATE INDEX IF NOT EXISTS idx_sync_events_entity
+                    ON sync_events(entity_kind, entity_id, occurred_at_ms);
+                PRAGMA user_version = 14;
+                COMMIT;
+                ",
+            )?;
+        }
+        if version < 15 {
+            self.connection.execute_batch(
+                "
+                BEGIN IMMEDIATE;
+                CREATE TABLE IF NOT EXISTS external_context_sources (
+                    source_id TEXT PRIMARY KEY,
+                    source_name TEXT NOT NULL,
+                    source_kind TEXT NOT NULL,
+                    imported_at_ms INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS external_context_items (
+                    id TEXT PRIMARY KEY,
+                    source_id TEXT NOT NULL,
+                    source_name TEXT NOT NULL,
+                    source_kind TEXT NOT NULL,
+                    external_id TEXT NOT NULL,
+                    kind TEXT NOT NULL CHECK(kind IN ('calendar_event', 'project', 'task')),
+                    title TEXT NOT NULL,
+                    start_at_ms INTEGER,
+                    end_at_ms INTEGER,
+                    project_name TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT '',
+                    imported_at_ms INTEGER NOT NULL,
+                    UNIQUE(source_id, external_id, kind),
+                    FOREIGN KEY(source_id) REFERENCES external_context_sources(source_id)
+                        ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_external_context_time
+                    ON external_context_items(kind, start_at_ms, end_at_ms);
+                PRAGMA user_version = 15;
+                COMMIT;
+                ",
+            )?;
+        }
+        if version < 16 {
+            self.connection.execute_batch(
+                "
+                BEGIN IMMEDIATE;
                 DELETE FROM ai_jobs
                 WHERE status='pending'
                   AND attempts=0
@@ -1601,17 +1672,17 @@ impl Database {
                     'daily_analysis',
                     'work_ledger_assignment'
                   );
-                PRAGMA user_version = 14;
+                PRAGMA user_version = 16;
                 COMMIT;
                 ",
             )?;
         }
-        if version < 15 {
-            // The v14 cleanup can release several megabytes. VACUUM is best-effort because a
+        if version < 17 {
+            // The v16 cleanup can release several megabytes. VACUUM is best-effort because a
             // concurrent read-only UI may briefly hold a lock; even without it SQLite will reuse
             // the freed pages for future writes.
             let _ = self.connection.execute_batch("VACUUM;");
-            self.connection.execute_batch("PRAGMA user_version = 15;")?;
+            self.connection.execute_batch("PRAGMA user_version = 17;")?;
         }
         Ok(())
     }
@@ -2309,6 +2380,29 @@ impl Database {
         Ok(true)
     }
 
+    pub fn classification_rule_context_for_segment(
+        &self,
+        segment_id: &str,
+    ) -> Result<Option<(String, String, i64)>> {
+        let Some((app, title)) = self
+            .connection
+            .query_row(
+                "SELECT app, title FROM activity_segments WHERE id=?1",
+                [segment_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?
+        else {
+            return Ok(None);
+        };
+        let historical_match_count = self.connection.query_row(
+            "SELECT COUNT(*) FROM activity_segments WHERE app=?1 AND title=?2",
+            params![app, title],
+            |row| row.get(0),
+        )?;
+        Ok(Some((app, title, historical_match_count)))
+    }
+
     pub fn list_manual_rules(&self) -> Result<Vec<ManualRule>> {
         let mut statement = self.connection.prepare(
             "SELECT kind, pattern, category, video_purpose
@@ -2464,6 +2558,224 @@ impl Database {
             params![key, value_json],
         )?;
         Ok(())
+    }
+
+    pub fn local_sync_device_id(&self, now_ms: i64) -> Result<String> {
+        let proposed = random_device_id().map_err(invalid_review)?;
+        let transaction =
+            Transaction::new_unchecked(&self.connection, TransactionBehavior::Immediate)?;
+        let existing = transaction
+            .query_row(
+                "SELECT value_json FROM settings WHERE key='sync_device_id'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        let device_id = existing
+            .as_deref()
+            .and_then(|value| serde_json::from_str::<String>(value).ok())
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(proposed);
+        let device_json =
+            serde_json::to_string(&device_id).map_err(|error| invalid_review(error.to_string()))?;
+        transaction.execute(
+            "INSERT INTO settings(key, value_json) VALUES ('sync_device_id', ?1)
+             ON CONFLICT(key) DO NOTHING",
+            [device_json],
+        )?;
+        transaction.execute(
+            "INSERT INTO sync_devices(device_id, created_at_ms, last_seen_at_ms)
+             VALUES (?1, ?2, ?2)
+             ON CONFLICT(device_id) DO UPDATE SET last_seen_at_ms=MAX(last_seen_at_ms, excluded.last_seen_at_ms)",
+            params![device_id, now_ms],
+        )?;
+        transaction.commit()?;
+        Ok(device_id)
+    }
+
+    pub fn append_local_sync_event(
+        &self,
+        occurred_at_ms: i64,
+        entity_kind: &str,
+        entity_id: &str,
+        operation: &str,
+        payload_json: &str,
+    ) -> Result<SyncEvent> {
+        let device_id = self.local_sync_device_id(occurred_at_ms)?;
+        let transaction =
+            Transaction::new_unchecked(&self.connection, TransactionBehavior::Immediate)?;
+        let sequence = transaction.query_row(
+            "SELECT COALESCE(MAX(sequence), 0) + 1 FROM sync_events WHERE device_id=?1",
+            [&device_id],
+            |row| row.get::<_, i64>(0),
+        )?;
+        let event = build_sync_event(
+            &device_id,
+            sequence,
+            occurred_at_ms,
+            entity_kind,
+            entity_id,
+            operation,
+            payload_json,
+        )
+        .map_err(invalid_review)?;
+        insert_sync_event_on(&transaction, &event, occurred_at_ms)?;
+        transaction.execute(
+            "UPDATE sync_devices SET last_seen_at_ms=MAX(last_seen_at_ms, ?2) WHERE device_id=?1",
+            params![device_id, occurred_at_ms],
+        )?;
+        transaction.commit()?;
+        Ok(event)
+    }
+
+    pub fn list_sync_events(&self) -> Result<Vec<SyncEvent>> {
+        let mut statement = self.connection.prepare(
+            "SELECT event_id, device_id, sequence, occurred_at_ms, entity_kind, entity_id,
+                    operation, payload_json, payload_hash
+             FROM sync_events
+             ORDER BY occurred_at_ms, device_id, sequence, event_id",
+        )?;
+        statement.query_map([], sync_event_from_row)?.collect()
+    }
+
+    pub fn ensure_organization_sync_snapshot(&self) -> Result<usize> {
+        let projects = self.list_work_ledger_projects(true)?;
+        let mut entities = Vec::<(String, String, i64, String)>::new();
+        for project in projects {
+            let tasks = self.list_work_ledger_tasks(&project.id)?;
+            entities.push((
+                "project".to_string(),
+                project.id.clone(),
+                project.updated_at_ms,
+                serde_json::to_string(&project)
+                    .map_err(|error| invalid_review(error.to_string()))?,
+            ));
+            for task in tasks {
+                entities.push((
+                    "task".to_string(),
+                    task.id.clone(),
+                    task.updated_at_ms,
+                    serde_json::to_string(&task)
+                        .map_err(|error| invalid_review(error.to_string()))?,
+                ));
+            }
+        }
+        let mut appended = 0;
+        for (kind, id, occurred_at_ms, payload) in entities {
+            let exists = self.connection.query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM sync_events WHERE entity_kind=?1 AND entity_id=?2
+                 )",
+                params![kind, id],
+                |row| row.get::<_, bool>(0),
+            )?;
+            if !exists {
+                self.append_local_sync_event(occurred_at_ms, &kind, &id, "upsert", &payload)?;
+                appended += 1;
+            }
+        }
+        Ok(appended)
+    }
+
+    pub fn import_sync_events(&self, events: Vec<SyncEvent>, imported_at_ms: i64) -> Result<usize> {
+        let events = merge_sync_events([], events).map_err(invalid_review)?;
+        let transaction =
+            Transaction::new_unchecked(&self.connection, TransactionBehavior::Immediate)?;
+        let mut inserted = 0;
+        for event in &events {
+            inserted += insert_sync_event_on(&transaction, event, imported_at_ms)? as usize;
+            transaction.execute(
+                "INSERT INTO sync_devices(device_id, created_at_ms, last_seen_at_ms)
+                 VALUES (?1, ?2, ?2)
+                 ON CONFLICT(device_id) DO UPDATE SET last_seen_at_ms=MAX(last_seen_at_ms, excluded.last_seen_at_ms)",
+                params![event.device_id, event.occurred_at_ms],
+            )?;
+        }
+        let all_events = {
+            let mut statement = transaction.prepare(
+                "SELECT event_id, device_id, sequence, occurred_at_ms, entity_kind, entity_id,
+                        operation, payload_json, payload_hash
+                 FROM sync_events",
+            )?;
+            statement
+                .query_map([], sync_event_from_row)?
+                .collect::<Result<Vec<_>>>()?
+        };
+        for event in latest_entity_events(&all_events).values() {
+            apply_organization_sync_projection_on(&transaction, event)?;
+        }
+        transaction.commit()?;
+        Ok(inserted)
+    }
+
+    pub fn import_external_context(&self, import: &ExternalContextImport) -> Result<usize> {
+        let transaction =
+            Transaction::new_unchecked(&self.connection, TransactionBehavior::Immediate)?;
+        let imported_at_ms = import
+            .items
+            .iter()
+            .map(|item| item.imported_at_ms)
+            .max()
+            .unwrap_or_else(now_millis);
+        transaction.execute(
+            "INSERT INTO external_context_sources(source_id, source_name, source_kind, imported_at_ms)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(source_id) DO UPDATE SET source_name=excluded.source_name,
+                source_kind=excluded.source_kind, imported_at_ms=excluded.imported_at_ms",
+            params![import.source_id, import.source_name, import.source_kind, imported_at_ms],
+        )?;
+        for item in &import.items {
+            transaction.execute(
+                "INSERT INTO external_context_items(
+                    id, source_id, source_name, source_kind, external_id, kind, title,
+                    start_at_ms, end_at_ms, project_name, status, imported_at_ms
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                 ON CONFLICT(id) DO UPDATE SET source_name=excluded.source_name,
+                    title=excluded.title, start_at_ms=excluded.start_at_ms,
+                    end_at_ms=excluded.end_at_ms, project_name=excluded.project_name,
+                    status=excluded.status, imported_at_ms=excluded.imported_at_ms",
+                params![
+                    item.id,
+                    item.source_id,
+                    item.source_name,
+                    item.source_kind,
+                    item.external_id,
+                    external_context_kind_key(item.kind),
+                    item.title,
+                    item.start_at_ms,
+                    item.end_at_ms,
+                    item.project_name,
+                    item.status,
+                    item.imported_at_ms,
+                ],
+            )?;
+        }
+        transaction.execute(
+            "DELETE FROM external_context_items
+             WHERE source_id=?1 AND imported_at_ms<>?2",
+            params![import.source_id, imported_at_ms],
+        )?;
+        transaction.commit()?;
+        Ok(import.items.len())
+    }
+
+    pub fn list_external_context(
+        &self,
+        start_ms: i64,
+        end_ms: i64,
+    ) -> Result<Vec<ExternalContextItem>> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, source_id, source_name, source_kind, external_id, kind, title,
+                    start_at_ms, end_at_ms, project_name, status, imported_at_ms
+             FROM external_context_items
+             WHERE kind<>'calendar_event'
+                OR (COALESCE(end_at_ms, start_at_ms + 1)>?1 AND start_at_ms<?2)
+             ORDER BY CASE kind WHEN 'calendar_event' THEN 0 WHEN 'project' THEN 1 ELSE 2 END,
+                      COALESCE(start_at_ms, 0), source_name, title, id",
+        )?;
+        statement
+            .query_map(params![start_ms, end_ms], external_context_item_from_row)?
+            .collect()
     }
 
     pub fn start_focus_session(
@@ -2653,6 +2965,25 @@ impl Database {
                 })
             })?
             .collect()
+    }
+
+    pub fn sync_status(&self, now_ms: i64) -> Result<SyncStatus> {
+        let device_id = self.local_sync_device_id(now_ms)?;
+        let known_device_count =
+            self.connection
+                .query_row("SELECT COUNT(*) FROM sync_devices", [], |row| row.get(0))?;
+        let (event_count, last_event_at_ms) = self.connection.query_row(
+            "SELECT COUNT(*), MAX(occurred_at_ms) FROM sync_events",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        Ok(SyncStatus {
+            device_id,
+            known_device_count,
+            event_count,
+            last_event_at_ms,
+            encryption_available: true,
+        })
     }
 
     pub fn active_focus_session(&self) -> Result<Option<FocusSessionRecord>> {
@@ -7092,6 +7423,168 @@ const AI_REVIEW_COLUMNS: &str = "id, kind, state, subject_id, before_json, propo
 
 fn invalid_review(message: impl Into<String>) -> rusqlite::Error {
     rusqlite::Error::InvalidParameterName(message.into())
+}
+
+fn sync_event_from_row(row: &Row<'_>) -> Result<SyncEvent> {
+    Ok(SyncEvent {
+        event_id: row.get(0)?,
+        device_id: row.get(1)?,
+        sequence: row.get(2)?,
+        occurred_at_ms: row.get(3)?,
+        entity_kind: row.get(4)?,
+        entity_id: row.get(5)?,
+        operation: row.get(6)?,
+        payload_json: row.get(7)?,
+        payload_hash: row.get(8)?,
+    })
+}
+
+fn insert_sync_event_on(
+    connection: &Connection,
+    event: &SyncEvent,
+    imported_at_ms: i64,
+) -> Result<bool> {
+    let inserted = connection.execute(
+        "INSERT OR IGNORE INTO sync_events(
+            event_id, device_id, sequence, occurred_at_ms, entity_kind, entity_id,
+            operation, payload_json, payload_hash, imported_at_ms
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![
+            event.event_id,
+            event.device_id,
+            event.sequence,
+            event.occurred_at_ms,
+            event.entity_kind,
+            event.entity_id,
+            event.operation,
+            event.payload_json,
+            event.payload_hash,
+            imported_at_ms,
+        ],
+    )?;
+    if inserted == 1 {
+        return Ok(true);
+    }
+    let existing = connection
+        .query_row(
+            "SELECT event_id, device_id, sequence, occurred_at_ms, entity_kind, entity_id,
+                    operation, payload_json, payload_hash
+             FROM sync_events
+             WHERE event_id=?1 OR (device_id=?2 AND sequence=?3)",
+            params![event.event_id, event.device_id, event.sequence],
+            sync_event_from_row,
+        )
+        .optional()?;
+    if existing.as_ref() == Some(event) {
+        Ok(false)
+    } else {
+        Err(invalid_review(format!(
+            "sync event collision for {} sequence {}",
+            event.device_id, event.sequence
+        )))
+    }
+}
+
+fn apply_organization_sync_projection_on(connection: &Connection, event: &SyncEvent) -> Result<()> {
+    if event.operation != "upsert" {
+        return Ok(());
+    }
+    match event.entity_kind.as_str() {
+        "project" => {
+            let project: Project = serde_json::from_str(&event.payload_json)
+                .map_err(|error| invalid_review(format!("invalid synced project: {error}")))?;
+            if project.id != event.entity_id {
+                return Err(invalid_review("synced project identity mismatch"));
+            }
+            connection.execute(
+                "INSERT INTO projects(
+                    id, name, color, status, description, created_at_ms, updated_at_ms, archived_at_ms
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 ON CONFLICT(id) DO UPDATE SET name=excluded.name, color=excluded.color,
+                    status=excluded.status, description=excluded.description,
+                    created_at_ms=excluded.created_at_ms, updated_at_ms=excluded.updated_at_ms,
+                    archived_at_ms=excluded.archived_at_ms",
+                params![
+                    project.id,
+                    project.name,
+                    project.color,
+                    project.status.as_str(),
+                    project.description,
+                    project.created_at_ms,
+                    project.updated_at_ms,
+                    project.archived_at_ms,
+                ],
+            )?;
+        }
+        "task" => {
+            let task: Task = serde_json::from_str(&event.payload_json)
+                .map_err(|error| invalid_review(format!("invalid synced task: {error}")))?;
+            if task.id != event.entity_id {
+                return Err(invalid_review("synced task identity mismatch"));
+            }
+            connection.execute(
+                "INSERT INTO tasks(
+                    id, project_id, title, status, priority, expected_output, due_date,
+                    created_at_ms, updated_at_ms, completed_at_ms, origin_kind, origin_key,
+                    origin_confidence, review_state
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'manual', NULL, NULL, 'confirmed')
+                 ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id,
+                    title=excluded.title, status=excluded.status, priority=excluded.priority,
+                    expected_output=excluded.expected_output, due_date=excluded.due_date,
+                    created_at_ms=excluded.created_at_ms, updated_at_ms=excluded.updated_at_ms,
+                    completed_at_ms=excluded.completed_at_ms",
+                params![
+                    task.id,
+                    task.project_id,
+                    task.title,
+                    task.status.as_str(),
+                    task.priority.as_str(),
+                    task.expected_output,
+                    task.due_date,
+                    task.created_at_ms,
+                    task.updated_at_ms,
+                    task.completed_at_ms,
+                ],
+            )?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn external_context_kind_key(kind: ExternalContextKind) -> &'static str {
+    match kind {
+        ExternalContextKind::CalendarEvent => "calendar_event",
+        ExternalContextKind::Project => "project",
+        ExternalContextKind::Task => "task",
+    }
+}
+
+fn external_context_item_from_row(row: &Row<'_>) -> Result<ExternalContextItem> {
+    let kind = match row.get::<_, String>(5)?.as_str() {
+        "calendar_event" => ExternalContextKind::CalendarEvent,
+        "project" => ExternalContextKind::Project,
+        "task" => ExternalContextKind::Task,
+        value => {
+            return Err(invalid_review(format!(
+                "invalid external context kind: {value}"
+            )));
+        }
+    };
+    Ok(ExternalContextItem {
+        id: row.get(0)?,
+        source_id: row.get(1)?,
+        source_name: row.get(2)?,
+        source_kind: row.get(3)?,
+        external_id: row.get(4)?,
+        kind,
+        title: row.get(6)?,
+        start_at_ms: row.get(7)?,
+        end_at_ms: row.get(8)?,
+        project_name: row.get(9)?,
+        status: row.get(10)?,
+        imported_at_ms: row.get(11)?,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
