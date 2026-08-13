@@ -94,6 +94,20 @@ describe("TimelinePanel", () => {
     expect(researchBand?.color).not.toBe(IDLE_TIMELINE_COLOR);
   });
 
+  it("keeps common application colors visually distinct", () => {
+    const clusters = buildTimelineClusters([
+      { ...segments[0], id: "chatgpt", app: "ChatGPT", startMs: 8 * 3_600_000, endMs: 8.5 * 3_600_000 },
+      { ...segments[0], id: "orbit", app: "Daily Task Monitor", startMs: 8.5 * 3_600_000, endMs: 9 * 3_600_000 },
+    ]);
+    const colors = new Map(clusters.map((cluster) => [cluster.apps[0].app, cluster.apps[0].color]));
+    const channels = (color: string) => color.match(/[\da-f]{2}/gi)!.map((channel) => Number.parseInt(channel, 16));
+    const chatgpt = channels(colors.get("ChatGPT")!);
+    const orbit = channels(colors.get("Daily Task Monitor")!);
+    const distance = Math.hypot(...chatgpt.map((channel, index) => channel - orbit[index]));
+
+    expect(distance).toBeGreaterThan(120);
+  });
+
   it("renders the resolved app identity and shared native icon", () => {
     const appPath = "C:\\Program Files\\Microsoft VS Code\\Code.exe";
     const identity: AppIdentity = {

@@ -10,16 +10,16 @@ import { PanelHeading } from "./analysis-shared";
 const DAY_MS = 24 * 3_600_000;
 const BUCKET_MS = 5 * 60_000;
 const TIMELINE_COLORS = [
-  "#46647a",
-  "#56876d",
-  "#c18a3d",
-  "#b96348",
-  "#8a617d",
-  "#4d858d",
-  "#858a55",
-  "#b46a72",
-  "#6877a2",
-  "#95705a",
+  "#2563eb",
+  "#ea580c",
+  "#059669",
+  "#7c3aed",
+  "#eab308",
+  "#0891b2",
+  "#dc2626",
+  "#65a30d",
+  "#db2777",
+  "#4f46e5",
 ];
 export const IDLE_TIMELINE_COLOR = "#94a3b8";
 const emptyReviewSubjectIds: ReadonlySet<string> = new Set();

@@ -2496,7 +2496,13 @@ main { width: min(1600px, 100%); margin: 0 auto; padding: 20px 24px 48px; }
   font-size: 10px;
 }
 .trends-workbench .trend-granularity button {
-  min-height: 30px;
+  min-width: 42px;
+  min-height: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  padding: 0 9px;
+  line-height: 1;
 }
 .trends-workbench .trend-toggle {
   min-height: 30px;
@@ -3670,6 +3676,17 @@ main { width: min(1600px, 100%); margin: 0 auto; padding: 20px 24px 48px; }
   box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 8%, transparent),
     0 3px 9px color-mix(in srgb, var(--text) 5%, transparent);
 }
+.app-frame .trends-workbench .trend-granularity {
+  height: 30px;
+  min-height: 30px;
+  align-items: center;
+  padding: 2px;
+  overflow: hidden;
+}
+.app-frame .trends-workbench .trend-granularity button {
+  min-height: 24px;
+  height: 24px;
+}
 
 .app-frame .ai-review-toolbar {
   display: grid;
@@ -4030,7 +4047,7 @@ main { width: min(1600px, 100%); margin: 0 auto; padding: 20px 24px 48px; }
   min-width: 0;
   min-height: 48px;
   display: grid;
-  grid-template-columns: 94px 24px minmax(180px, 1fr) 112px 76px auto 122px;
+  grid-template-columns: 94px 34px minmax(180px, 1fr) 112px 76px auto 122px;
   align-items: center;
   gap: 9px;
   padding: 6px 7px 6px 10px;
@@ -4038,7 +4055,7 @@ main { width: min(1600px, 100%); margin: 0 auto; padding: 20px 24px 48px; }
   border-left: 2px solid var(--row-color);
 }
 .app-frame .hour-segment > time { color: var(--muted); font-family: var(--font-time); font-size: 10px; }
-.app-frame .hour-segment > .app-icon { width: 22px; height: 22px; }
+.app-frame .hour-segment > .app-icon { width: 22px; height: 22px; justify-self: end; }
 .app-frame .hour-segment > div { min-width: 0; }
 .app-frame .hour-segment > div strong,
 .app-frame .hour-segment > div span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -4050,7 +4067,7 @@ main { width: min(1600px, 100%); margin: 0 auto; padding: 20px 24px 48px; }
   .app-frame .timeline-tools { justify-content: flex-start; }
   .app-frame .orbit-selection > header { align-items: flex-start; flex-direction: column; }
   .app-frame .orbit-selection-apps { justify-content: flex-start; }
-  .app-frame .hour-segment { grid-template-columns: 82px 22px minmax(140px, 1fr) 106px 116px; }
+  .app-frame .hour-segment { grid-template-columns: 82px 32px minmax(140px, 1fr) 106px 116px; }
   .app-frame .hour-segment > b,
   .app-frame .hour-segment .timeline-review-marker { display: none; }
 }
@@ -4058,7 +4075,7 @@ main { width: min(1600px, 100%); margin: 0 auto; padding: 20px 24px 48px; }
 @media (max-width: 620px) {
   .app-frame .orbit-timeline-canvas { min-width: 780px; }
   .app-frame .timeline-zoom input { width: 62px; }
-  .app-frame .hour-segment { grid-template-columns: 76px 22px minmax(0, 1fr); }
+  .app-frame .hour-segment { grid-template-columns: 76px 32px minmax(0, 1fr); }
   .app-frame .hour-segment .category-tag,
   .app-frame .hour-segment .inline-classifier { grid-column: 3; }
 }
