@@ -34,12 +34,12 @@ jobs:
           $source = Get-ChildItem "$bundleDir/*.exe" | Select-Object -First 1
           if (-not $source) { throw "NSIS installer was not generated" }
           $version = "${{ github.ref_name }}".TrimStart("v")
-          $target = Join-Path $bundleDir "DailyTaskMonitor-$version-x64-setup.exe"
+          $target = Join-Path $bundleDir "Orbit-$version-x64-setup.exe"
           Move-Item -LiteralPath $source.FullName -Destination $target -Force
       - name: Create checksums
         shell: pwsh
         run: |
-          Get-ChildItem src-tauri/target/release/bundle/nsis/DailyTaskMonitor-*.exe | ForEach-Object {
+          Get-ChildItem src-tauri/target/release/bundle/nsis/Orbit-*.exe | ForEach-Object {
             $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
             "$hash  $($_.Name)" | Set-Content "$($_.FullName).sha256" -Encoding ascii
           }
@@ -47,5 +47,5 @@ jobs:
         with:
           generate_release_notes: true
           files: |
-            src-tauri/target/release/bundle/nsis/DailyTaskMonitor-*.exe
-            src-tauri/target/release/bundle/nsis/DailyTaskMonitor-*.sha256
+            src-tauri/target/release/bundle/nsis/Orbit-*.exe
+            src-tauri/target/release/bundle/nsis/Orbit-*.sha256

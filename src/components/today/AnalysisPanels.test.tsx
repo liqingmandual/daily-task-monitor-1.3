@@ -92,6 +92,41 @@ describe("TodayAnalysisPanels", () => {
     expect(html).toContain('data-app-icon="native"');
   });
 
+  it("limits the activity and application breakdown lists to five rows", () => {
+    const categories = [
+      "research",
+      "text_input",
+      "creation_development",
+      "social",
+      "game",
+      "file_management",
+    ] as const;
+    const manySegments = categories.map((category, index) => ({
+      ...segments[0],
+      id: `segment-${index}`,
+      startMs: index * 3_600_000,
+      endMs: (index + 1) * 3_600_000,
+      app: `Ranked App ${index + 1}`,
+      category,
+    }));
+    const html = renderToStaticMarkup(
+      <TodayAnalysisPanels
+        metrics={buildDashboardMetrics(manySegments)}
+        activityCompositions={buildFallbackActivityCompositions(manySegments)}
+        activityScope="all"
+        onActivityScopeChange={() => {}}
+        selectedSeries={["active", "learning"]}
+        onSeriesChange={() => {}}
+        onDrill={() => {}}
+      />,
+    );
+
+    expect((html.match(/class="bar-item"/g) ?? []).length).toBe(5);
+    expect((html.match(/class="app-row"/g) ?? []).length).toBe(5);
+    expect(html).toContain("Ranked App 5");
+    expect(html).not.toContain("Ranked App 6");
+  });
+
   it("renders the learning composition without falling back to all activity", () => {
     const withIdle = [
       ...segments,

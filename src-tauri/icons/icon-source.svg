@@ -1,5 +1,39 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="96" fill="#2f6d6f"/>
-  <path fill="#ffffff" d="M128 120h256v272H128zm48 56v64h160v-64zm0 104v56h112v-56z"/>
-  <path fill="#9cded5" d="M320 280h40v56h-40z"/>
+  <title>Orbit day record ring</title>
+  <desc>A day ring with work, life, and entertainment activity arcs.</desc>
+
+  <rect x="12" y="12" width="488" height="488" rx="92" fill="#050505"/>
+
+  <!-- The upper and lower halves distinguish daylight from night. -->
+  <path d="M92 256a164 164 0 0 1 328 0" fill="none" stroke="#f7f4ec" stroke-width="56"/>
+  <path d="M420 256a164 164 0 0 1-328 0" fill="none" stroke="#dedede" stroke-width="56"/>
+
+  <!-- Recorded activity: work, life, and entertainment. -->
+  <path d="M256 92a164 164 0 0 1 164 164" fill="none" stroke="#e9a23b" stroke-width="56"/>
+  <path d="M214 414a164 164 0 0 1-74-42" fill="none" stroke="#28a99e" stroke-width="56"/>
+  <path d="M361 382a164 164 0 0 1-23 16" fill="none" stroke="#d6654a" stroke-width="56"/>
+
+  <!-- Thin dividers keep the colored records measured and discrete. -->
+  <g stroke="#050505" stroke-width="5">
+    <path d="M392 256h56"/>
+    <path d="M221 387l-15 55"/>
+    <path d="M160 352l-40 40"/>
+    <path d="M343 360l36 43"/>
+    <path d="M324 374l28 48"/>
+  </g>
+
+  <!-- Three-hour ticks; no clock hands, so the center stays calm. -->
+  <g stroke="#050505" stroke-width="7" stroke-linecap="square">
+    <path d="M256 120v16"/>
+    <path d="M256 120v16" transform="rotate(45 256 256)"/>
+    <path d="M256 120v16" transform="rotate(90 256 256)"/>
+    <path d="M256 120v16" transform="rotate(135 256 256)"/>
+    <path d="M256 120v16" transform="rotate(180 256 256)"/>
+    <path d="M256 120v16" transform="rotate(225 256 256)"/>
+    <path d="M256 120v16" transform="rotate(270 256 256)"/>
+    <path d="M256 120v16" transform="rotate(315 256 256)"/>
+  </g>
+
+  <!-- Midnight is the single open boundary of the day. -->
+  <path d="M256 61v64" stroke="#050505" stroke-width="7"/>
 </svg>

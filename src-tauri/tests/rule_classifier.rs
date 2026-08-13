@@ -81,7 +81,7 @@ fn distinguishes_research_from_sustained_text_reading() {
 #[test]
 fn editing_tools_with_input_are_creation_development() {
     let classifier = RuleClassifier::default();
-    let mut item = evidence("Codex", "Daily Task Monitor - app.tsx");
+    let mut item = evidence("Codex", "Orbit - app.tsx");
     item.key_presses = 40;
 
     assert_eq!(

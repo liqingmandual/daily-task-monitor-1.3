@@ -1,11 +1,12 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "每日任务监测系统",
+  "productName": "Orbit",
+  "mainBinaryName": "Orbit",
   "version": "1.3.0",
   "identifier": "com.dailytaskmonitor.desktop",
   "build": {
     "beforeDevCommand": "pnpm run dev",
-    "devUrl": "http://localhost:1420",
+    "devUrl": "http://127.0.0.1:1420",
     "beforeBuildCommand": "pnpm run build",
     "frontendDist": "../dist"
   },
@@ -13,13 +14,16 @@
     "windows": [
       {
         "label": "main",
-        "title": "每日任务监测系统",
+        "title": "Orbit",
         "width": 1360,
         "height": 860,
         "minWidth": 980,
         "minHeight": 680,
         "center": true,
-        "resizable": true
+        "resizable": true,
+        "titleBarStyle": "Transparent",
+        "hiddenTitle": true,
+        "backgroundColor": "#f4f7fa"
       }
     ],
     "security": {
@@ -46,7 +50,7 @@
         "languages": ["SimpChinese", "English"]
       }
     },
-    "shortDescription": "Offline-first Windows activity and learning tracker",
-    "longDescription": "A private, offline-first Windows desktop monitor with local classification, browser history collection, AI backfill, and Markdown reports."
+    "shortDescription": "Local-first activity and work insight tracker",
+    "longDescription": "Orbit is a private, local-first desktop activity tracker with explainable classification, browser context, workflow insights, and optional AI analysis."
   }
 }

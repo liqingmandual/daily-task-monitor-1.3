@@ -1,4 +1,5 @@
 import { isLearningActivity } from "./activity-composition";
+import { canonicalizeOverlappingSegments } from "./segment-overlap";
 
 export type ActivityCategory =
   | "idle"
@@ -19,6 +20,7 @@ export type ActivityDisplayKey =
 
 export type VideoPurpose = "learning" | "leisure" | "unknown";
 export type InactivityReason = "input_idle" | "continuity_gap" | "legacy_gap_repair";
+export type ClassificationSource = "manual" | "idle" | "rule" | "behavior" | "ai" | "pending";
 
 export interface Segment {
   id: string;
@@ -30,6 +32,9 @@ export interface Segment {
   category: ActivityCategory;
   videoPurpose: VideoPurpose;
   confidence: number;
+  classificationSource?: ClassificationSource;
+  classificationReason?: string;
+  classificationModelVersion?: string;
   needsReview: boolean;
   inactivityReason?: InactivityReason | null;
 }
@@ -169,7 +174,7 @@ export function buildDashboardMetrics(segments: Segment[], dayStartMs = 0): Dash
   let idleSeconds = 0;
   let learningSeconds = 0;
 
-  for (const segment of segments) {
+  for (const segment of canonicalizeOverlappingSegments(segments)) {
     const durationSeconds = Math.max(0, Math.round((segment.endMs - segment.startMs) / 1_000));
     if (!durationSeconds) continue;
     monitoredSeconds += durationSeconds;

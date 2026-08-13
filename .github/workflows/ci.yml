@@ -2,12 +2,14 @@ name: CI
 
 on:
   push:
-    branches: [main]
   pull_request:
 
 jobs:
   frontend:
-    runs-on: windows-latest
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -20,15 +22,20 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
       - run: pnpm build
+      - run: pnpm run build:extensions
 
   rust:
-    runs-on: windows-latest
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
       - run: cargo test --manifest-path src-tauri/Cargo.toml --all-targets
 
   desktop:

@@ -8,6 +8,8 @@ import { formatChartDuration } from "../../lib/presentation";
 import { DonutChart, type DonutSelection, formatPreview, PanelHeading } from "./analysis-shared";
 
 const appColors = ["#2563eb", "#0891b2", "#7c3aed", "#d97706", "#059669", "#64748b", "#ec4899"];
+const APP_RANKING_LIMIT = 5;
+const OTHER_APPS_KEY = "__other_apps__";
 
 export function appRankingFilter(item: AppShareItem): TimelineFilter {
   return item.appPath
@@ -18,15 +20,24 @@ export function appRankingFilter(item: AppShareItem): TimelineFilter {
 export function AppRankingPanel({ metrics, identities = new Map(), onDrill, previewResetKey }: { metrics: DashboardMetrics; identities?: ReadonlyMap<string, AppIdentity>; onDrill: (filter: TimelineFilter) => void; previewResetKey?: string }) {
   const [preview, setPreview] = useState<DonutSelection | null>(null);
   useEffect(() => setPreview(null), [metrics, previewResetKey]);
-  const donutItems = useMemo(() => metrics.apps.map((item, index) => ({
-    key: appIdentityKey(item.name, item.appPath),
-    name: identityFor(identities, item.name, item.appPath).displayName,
-    value: item.seconds,
-    color: appColors[index % appColors.length],
-  })), [identities, metrics.apps]);
+  const topApps = useMemo(() => metrics.apps.slice(0, APP_RANKING_LIMIT), [metrics.apps]);
+  const donutItems = useMemo(() => {
+    const visible = topApps.map((item, index) => ({
+      key: appIdentityKey(item.name, item.appPath),
+      name: identityFor(identities, item.name, item.appPath).displayName,
+      value: item.seconds,
+      color: appColors[index % appColors.length],
+    }));
+    const otherValue = metrics.apps
+      .slice(APP_RANKING_LIMIT)
+      .reduce((total, item) => total + item.seconds, 0);
+    return otherValue > 0
+      ? [...visible, { key: OTHER_APPS_KEY, name: "其他应用", value: otherValue, color: "#a8a29e" }]
+      : visible;
+  }, [identities, metrics.apps, topApps]);
 
   return <article className="panel apps-panel" data-interaction-model="hover-preview-click-select">
-    <PanelHeading eyebrow="APPS" title="应用排行" icon={<ListFilter size={18} />} />
+    <PanelHeading eyebrow="TOP 5 APPS" title="应用排行" icon={<ListFilter size={18} />} />
     <div className="split-visual apps-split compact">
       <DonutChart
         ariaLabel="应用占活跃时间比例"
@@ -40,7 +51,7 @@ export function AppRankingPanel({ metrics, identities = new Map(), onDrill, prev
         }}
       />
       <div className="app-list">
-        {metrics.apps.slice(0, 7).map((item, index) => {
+        {topApps.map((item, index) => {
           const key = appIdentityKey(item.name, item.appPath);
           const identity = identityFor(identities, item.name, item.appPath);
           const donutItem = donutItems.find((candidate) => candidate.key === key)!;

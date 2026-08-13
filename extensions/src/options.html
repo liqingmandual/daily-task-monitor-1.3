@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Orbit Watcher</title><link rel="stylesheet" href="options.css"></head>
+  <body>
+    <main>
+      <h1>浏览器实时 watcher</h1>
+      <p>从桌面应用“设置 → 采集健康诊断”复制服务地址和连接码。数据只发送到本机。</p>
+      <label>服务地址<input id="endpoint" type="url" value="http://127.0.0.1:27123/v1/heartbeat"></label>
+      <label>连接码<input id="token" type="password" autocomplete="off"></label>
+      <button id="save" type="button">保存</button><output id="status" aria-live="polite"></output>
+    </main><script src="options.js"></script>
+  </body>
+</html>

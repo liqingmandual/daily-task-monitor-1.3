@@ -145,4 +145,18 @@ describe("legacy/preview composition fallback", () => {
     expect(result.all.items.some((item) => item.key === "unknown_video")).toBe(false);
     expect(result.all.items.find((item) => item.key === "pending")?.seconds).toBe(600);
   });
+
+  it("counts overlapping collector segments once and prefers activity over idle", () => {
+    const base: Segment = { id: "idle-a", startMs: 0, endMs: 14_400_000, app: "Idle", title: "Away", category: "idle", videoPurpose: "unknown", confidence: 1, needsReview: false };
+    const result = buildFallbackActivityCompositions([
+      base,
+      { ...base, id: "idle-b" },
+      { ...base, id: "research", startMs: 3_600_000, endMs: 7_200_000, app: "Chrome", title: "Research", category: "research" },
+    ]);
+
+    expect(result.all.totalSeconds).toBe(4 * 3_600);
+    expect(result.all.items.find((item) => item.key === "idle")?.seconds).toBe(3 * 3_600);
+    expect(result.all.items.find((item) => item.key === "research")?.seconds).toBe(3_600);
+    expect(result.meaningful.totalSeconds).toBe(3_600);
+  });
 });

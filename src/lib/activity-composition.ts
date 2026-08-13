@@ -1,4 +1,5 @@
 import type { ActivityCategory, ActivityDisplayKey, Segment, VideoPurpose } from "./metrics";
+import { canonicalizeOverlappingSegments } from "./segment-overlap";
 
 export type { ActivityDisplayKey } from "./metrics";
 
@@ -169,7 +170,7 @@ export function buildFallbackActivityCompositions(
 ): ActivityCompositions {
   const all = new Map<ActivityDisplayKey, ActivityCompositionItem>();
   const meaningful = new Map<ActivityDisplayKey, ActivityCompositionItem>();
-  for (const segment of segments) {
+  for (const segment of canonicalizeOverlappingSegments(segments)) {
     const seconds = Math.max(0, Math.round((segment.endMs - segment.startMs) / 1_000));
     if (!seconds) continue;
     const meta = displayMetaForActivity(segment.category, segment.videoPurpose);

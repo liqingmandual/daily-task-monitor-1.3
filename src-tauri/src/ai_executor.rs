@@ -193,8 +193,8 @@ pub struct CodexHealth {
 }
 
 fn is_explicit_codex_path(value: &str) -> bool {
-    let path = Path::new(value.trim());
-    path.is_absolute() || path.components().count() > 1
+    let value = value.trim();
+    Path::new(value).is_absolute() || value.contains(['/', '\\'])
 }
 
 fn is_windows_apps_candidate(path: &Path) -> bool {
@@ -213,6 +213,8 @@ fn push_unique_candidate(candidates: &mut Vec<PathBuf>, path: PathBuf) {
 pub fn codex_executable_candidates_with(
     configured: &str,
     local_app_data: Option<&Path>,
+    user_home: Option<&Path>,
+    applications_dir: Option<&Path>,
     search_path: Option<&OsStr>,
     path_ext: Option<&OsStr>,
 ) -> Vec<PathBuf> {
@@ -253,6 +255,51 @@ pub fn codex_executable_candidates_with(
         }
     }
 
+    if automatic && let Some(user_home) = user_home {
+        for relative_path in [
+            ".local/bin/codex",
+            ".npm-global/bin/codex",
+            ".volta/bin/codex",
+            ".bun/bin/codex",
+            "Library/pnpm/codex",
+        ] {
+            let candidate = user_home.join(relative_path);
+            if candidate.is_file() {
+                push_unique_candidate(&mut candidates, candidate);
+            }
+        }
+
+        let nvm_versions = user_home.join(".nvm/versions/node");
+        if let Ok(entries) = std::fs::read_dir(nvm_versions) {
+            let mut nvm_candidates = entries
+                .flatten()
+                .map(|entry| entry.path().join("bin/codex"))
+                .filter(|path| path.is_file())
+                .collect::<Vec<_>>();
+            nvm_candidates.sort_by(|left, right| right.cmp(left));
+            for path in nvm_candidates {
+                push_unique_candidate(&mut candidates, path);
+            }
+        }
+    }
+
+    if automatic {
+        for candidate in [
+            PathBuf::from("/opt/homebrew/bin/codex"),
+            PathBuf::from("/usr/local/bin/codex"),
+        ] {
+            if candidate.is_file() {
+                push_unique_candidate(&mut candidates, candidate);
+            }
+        }
+        if let Some(applications_dir) = applications_dir {
+            let bundled_cli = applications_dir.join("ChatGPT.app/Contents/Resources/codex");
+            if bundled_cli.is_file() {
+                push_unique_candidate(&mut candidates, bundled_cli);
+            }
+        }
+    }
+
     let bare_name = if configured.is_empty() {
         "codex"
     } else {
@@ -285,11 +332,21 @@ pub fn codex_executable_candidates_with(
 
 pub fn codex_executable_candidates(configured: &str) -> Vec<PathBuf> {
     let local_app_data = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
+    #[cfg(unix)]
+    let user_home = std::env::var_os("HOME").map(PathBuf::from);
+    #[cfg(not(unix))]
+    let user_home: Option<PathBuf> = None;
+    #[cfg(target_os = "macos")]
+    let applications_dir = Some(Path::new("/Applications"));
+    #[cfg(not(target_os = "macos"))]
+    let applications_dir: Option<&Path> = None;
     let search_path = std::env::var_os("PATH");
     let path_ext = std::env::var_os("PATHEXT");
     codex_executable_candidates_with(
         configured,
         local_app_data.as_deref(),
+        user_home.as_deref(),
+        applications_dir,
         search_path.as_deref(),
         path_ext.as_deref(),
     )
@@ -906,7 +963,13 @@ fn run_process(
     timeout: Duration,
 ) -> Result<ProcessOutcome, AiExecutionError> {
     let working_dir = codex_working_dir();
-    let _ = std::fs::create_dir_all(&working_dir);
+    std::fs::create_dir_all(&working_dir).map_err(|error| {
+        AiExecutionError::new(
+            AiExecutionErrorKind::CliFailed,
+            format!("Failed to prepare Codex working directory: {error}"),
+            None,
+        )
+    })?;
     let process_tree = ProcessTree::new().map_err(process_job_error)?;
     let mut command = Command::new(executable);
     command
@@ -1550,9 +1613,16 @@ fn unix_time_ms() -> i64 {
 }
 
 fn codex_working_dir() -> PathBuf {
-    std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("data"))
-        .join("DailyTaskMonitor")
-        .join("data")
+    #[cfg(target_os = "windows")]
+    {
+        return std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join("DailyTaskMonitor")
+            .join("data");
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::env::temp_dir().join("DailyTaskMonitor").join("data")
+    }
 }

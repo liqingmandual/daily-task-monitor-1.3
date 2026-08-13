@@ -58,7 +58,7 @@ export default function KnowledgeGraphPage({ initialPayload, onBack, onOpenTimel
   return <div className="knowledge-space-shell">
     <header className="knowledge-topbar">
       <button className="knowledge-icon-button" aria-label="返回数据表盘" onClick={onBack}><ArrowLeft size={18} /></button>
-      <div className="knowledge-brand"><i><Network size={17} /></i><span>DAILY TASK MONITOR</span><strong>知识空间</strong></div>
+      <div className="knowledge-brand"><i><Network size={17} /></i><span>ORBIT</span><strong>知识空间</strong></div>
       <div className="knowledge-stats"><span>{visiblePayload.nodes.length.toLocaleString()} 个节点</span><span>{visiblePayload.links.length.toLocaleString()} 条关系</span>{reducedQuality && <em>已自动降低光效质量</em>}</div>
       <div className="knowledge-range" role="group" aria-label="图谱时间范围">
         <button className={range === "30d" ? "active" : ""} onClick={() => setRange("30d")}>近 30 天</button>

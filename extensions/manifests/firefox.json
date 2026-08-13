@@ -1,0 +1,10 @@
+{
+  "manifest_version": 2,
+  "name": "Orbit Watcher",
+  "version": "1.0.0",
+  "description": "Reports active public web pages to Orbit on this computer.",
+  "permissions": ["alarms", "storage", "tabs", "http://127.0.0.1/*"],
+  "background": { "scripts": ["background.js"] },
+  "options_ui": { "page": "options.html", "open_in_tab": true },
+  "browser_specific_settings": { "gecko": { "id": "daily-task-monitor-watcher@local" } }
+}

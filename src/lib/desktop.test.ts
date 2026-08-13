@@ -18,14 +18,27 @@ import {
   completeFocus,
   confirmDailyGoalTask,
   classifySegment,
+  previewClassificationRule,
+  exportSyncBundle,
+  getSyncStatus,
+  importSyncBundle,
+  importCalendarContext,
+  importProjectContext,
+  loadExternalContext,
   getAiConnectionHealth,
   getCodexHealth,
+  getCollectionHealth,
+  getFocusTimerStatus,
   getDailyGoal,
   listDailyGoalTaskLinks,
   recordDailyActualOutputProgress,
   saveDailyGoal,
   refreshAiConnectionHealth,
   listenAiConnectionHealthChanged,
+  listenActivityChanged,
+  listenCollectionHealthChanged,
+  listenOpenSettings,
+  listenFocusTimerChanged,
   testCodexCli,
   loadTrendAnalysis,
   loadTrendRange,
@@ -43,11 +56,13 @@ import {
   queueTrendResearchAnalysis,
   updateSettings,
   updateKnowledgeGraphExperiment,
+  updateUiFont,
   updateUiTheme,
   type AppSettings,
   type AiConnectionHealth,
   type BackendSegment,
   type CodexHealth,
+  type CollectionHealth,
   type TrendPayload,
   type TrendAnalysisResult,
   type TrendWorkbenchPayload,
@@ -69,6 +84,80 @@ describe("desktop bridge", () => {
   beforeEach(() => {
     vi.mocked(invoke).mockReset();
     vi.mocked(listen).mockReset();
+  });
+
+  it("uses the collection health command and event contracts", async () => {
+    const health = { generatedAtMs: 1_000 } as CollectionHealth;
+    const stop = vi.fn();
+    vi.mocked(invoke).mockResolvedValueOnce(health);
+    vi.mocked(listen).mockResolvedValueOnce(stop);
+    const onChanged = vi.fn();
+
+    await expect(getCollectionHealth()).resolves.toBe(health);
+    await expect(listenCollectionHealthChanged(onChanged)).resolves.toBe(stop);
+
+    expect(invoke).toHaveBeenCalledWith("get_collection_health");
+    expect(listen).toHaveBeenCalledWith("collection-health-changed", expect.any(Function));
+    const eventHandler = vi.mocked(listen).mock.calls[0][1];
+    eventHandler({ payload: undefined } as never);
+    expect(onChanged).toHaveBeenCalledOnce();
+  });
+
+  it("uses local calendar and project context command contracts", async () => {
+    const context = [{ id: "context-1", kind: "calendar_event" }];
+    vi.mocked(invoke)
+      .mockResolvedValueOnce(2)
+      .mockResolvedValueOnce(3)
+      .mockResolvedValueOnce(context);
+
+    await expect(importCalendarContext()).resolves.toBe(2);
+    await expect(importProjectContext()).resolves.toBe(3);
+    await expect(loadExternalContext(1_000, 2_000)).resolves.toBe(context);
+
+    expect(invoke).toHaveBeenNthCalledWith(1, "import_calendar_context");
+    expect(invoke).toHaveBeenNthCalledWith(2, "import_project_context");
+    expect(invoke).toHaveBeenNthCalledWith(3, "get_external_context", {
+      startMs: 1_000,
+      endMs: 2_000,
+    });
+  });
+
+  it("listens for the native settings menu event", async () => {
+    const stop = vi.fn();
+    const onOpen = vi.fn();
+    vi.mocked(listen).mockResolvedValueOnce(stop);
+
+    await expect(listenOpenSettings(onOpen)).resolves.toBe(stop);
+
+    expect(listen).toHaveBeenCalledWith("open-settings", onOpen);
+  });
+
+  it("loads and subscribes to the persisted focus countdown", async () => {
+    const status = {
+      sessionId: "focus-1",
+      goalDate: "2026-08-13",
+      goalText: "Ship timer",
+      plannedMinutes: 25,
+      startedAtMs: 1_000,
+      endsAtMs: 1_501_000,
+      remainingSeconds: 1_500,
+      expired: false,
+      paused: false,
+      taskId: null,
+    };
+    const stop = vi.fn();
+    const onChanged = vi.fn();
+    vi.mocked(invoke).mockResolvedValueOnce(status);
+    vi.mocked(listen).mockResolvedValueOnce(stop);
+
+    await expect(getFocusTimerStatus()).resolves.toBe(status);
+    await expect(listenFocusTimerChanged(onChanged)).resolves.toBe(stop);
+
+    expect(invoke).toHaveBeenCalledWith("get_focus_timer_status");
+    expect(listen).toHaveBeenCalledWith("focus-timer-changed", expect.any(Function));
+    const eventHandler = vi.mocked(listen).mock.calls[0][1];
+    eventHandler({ payload: status } as never);
+    expect(onChanged).toHaveBeenCalledWith(status);
   });
 
   it("accepts an inclusive 366-day trend range", () => {
@@ -152,6 +241,14 @@ describe("desktop bridge", () => {
     });
   });
 
+  it("persists the UI font through the settings patch", async () => {
+    await updateUiFont("Inter");
+
+    expect(invoke).toHaveBeenCalledWith("update_settings", {
+      patch: { uiFont: "Inter" },
+    });
+  });
+
   it("persists the experimental knowledge graph switch", async () => {
     await updateKnowledgeGraphExperiment(true);
 
@@ -215,6 +312,22 @@ describe("desktop bridge", () => {
     expect(received).toEqual([payload]);
   });
 
+  it("forwards activity-changed timestamps", async () => {
+    const received: unknown[] = [];
+    let emit: (payload: unknown) => void = () => undefined;
+    vi.mocked(listen).mockImplementation(async (event, handler) => {
+      expect(event).toBe("activity-changed");
+      const callback = handler as (event: { payload: unknown }) => void;
+      emit = (payload) => callback({ payload });
+      return () => undefined;
+    });
+
+    await listenActivityChanged((event) => received.push(event));
+    emit({ observedAtMs: 1_786_521_600_000 });
+
+    expect(received).toEqual([{ observedAtMs: 1_786_521_600_000 }]);
+  });
+
   it("preserves an explicitly selected video purpose in manual classification", async () => {
     vi.mocked(invoke).mockResolvedValueOnce(true);
 
@@ -226,6 +339,7 @@ describe("desktop bridge", () => {
         category: "video_input",
         videoPurpose: "learning",
         reason: "User correction",
+        createFutureRule: false,
       },
     });
   });
@@ -241,8 +355,50 @@ describe("desktop bridge", () => {
         category: "creation_development",
         videoPurpose: "unknown",
         reason: "User correction",
+        createFutureRule: false,
       },
     });
+  });
+
+  it("previews an exact future rule before applying it", async () => {
+    const preview = {
+      segmentId: "code-one",
+      matcherKind: "app_title" as const,
+      app: "Code",
+      title: "Orbit",
+      category: "creation_development" as const,
+      videoPurpose: "unknown" as const,
+      historicalMatchCount: 3,
+      appliesToFutureMatchesOnly: true,
+    };
+    vi.mocked(invoke).mockResolvedValueOnce(preview);
+
+    await expect(previewClassificationRule("code-one", "creation_development")).resolves.toBe(preview);
+    expect(invoke).toHaveBeenCalledWith("preview_manual_classification_rule", {
+      request: {
+        segmentId: "code-one",
+        category: "creation_development",
+        videoPurpose: "unknown",
+        reason: "User correction",
+        createFutureRule: false,
+      },
+    });
+  });
+
+  it("uses explicit local bundle commands for optional encrypted sync", async () => {
+    const status = { deviceId: "device-a", knownDeviceCount: 2, eventCount: 3, lastEventAtMs: 10, encryptionAvailable: true };
+    const imported = { insertedEventCount: 1, bundleEventCount: 2, sourceDeviceId: "device-b", path: "/tmp/orbit-sync.orbit-sync" };
+    vi.mocked(invoke)
+      .mockResolvedValueOnce(status)
+      .mockResolvedValueOnce("/tmp/orbit-sync.orbit-sync")
+      .mockResolvedValueOnce(imported);
+
+    await expect(getSyncStatus()).resolves.toBe(status);
+    await expect(exportSyncBundle("secret")).resolves.toBe("/tmp/orbit-sync.orbit-sync");
+    await expect(importSyncBundle("secret")).resolves.toBe(imported);
+    expect(invoke).toHaveBeenNthCalledWith(1, "get_sync_status");
+    expect(invoke).toHaveBeenNthCalledWith(2, "export_sync_bundle", { passphrase: "secret" });
+    expect(invoke).toHaveBeenNthCalledWith(3, "import_sync_bundle", { passphrase: "secret" });
   });
 
   it("loads and patches the AI execution settings with exact camelCase fields", async () => {
@@ -261,6 +417,7 @@ describe("desktop bridge", () => {
       excludedApps: [],
       excludedDomains: [],
       uiTheme: "classic-workbench",
+      uiFont: "Ubuntu",
       experimentalKnowledgeGraphEnabled: false,
     } satisfies AppSettings;
     vi.mocked(invoke).mockResolvedValueOnce(settings);

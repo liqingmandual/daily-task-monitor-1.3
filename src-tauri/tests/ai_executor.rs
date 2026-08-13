@@ -448,6 +448,8 @@ fn codex_candidates_prefer_app_then_local_cli_then_every_path_match() {
     let candidates = codex_executable_candidates_with(
         "codex",
         Some(&local),
+        None,
+        None,
         Some(search_path.as_os_str()),
         Some(std::ffi::OsStr::new(".EXE")),
     );
@@ -513,6 +515,8 @@ fn explicit_absolute_candidate_never_falls_back() {
     let candidates = codex_executable_candidates_with(
         explicit.to_str().unwrap(),
         None,
+        None,
+        None,
         Some(
             std::env::join_paths([fallback.parent().unwrap()])
                 .unwrap()
@@ -521,6 +525,32 @@ fn explicit_absolute_candidate_never_falls_back() {
         Some(std::ffi::OsStr::new(".EXE")),
     );
     assert_eq!(candidates, vec![explicit]);
+}
+
+#[test]
+fn codex_candidates_include_gui_safe_macos_locations() {
+    let root = unique_temp_dir("macos-codex-candidates");
+    let home = root.join("home");
+    let applications = root.join("Applications");
+    let local_cli = home.join(".local/bin/codex");
+    let nvm_old = home.join(".nvm/versions/node/v20.0.0/bin/codex");
+    let nvm_new = home.join(".nvm/versions/node/v22.0.0/bin/codex");
+    let bundled_cli = applications.join("ChatGPT.app/Contents/Resources/codex");
+    for path in [&local_cli, &nvm_old, &nvm_new, &bundled_cli] {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, "candidate").unwrap();
+    }
+
+    let candidates = codex_executable_candidates_with(
+        "codex",
+        None,
+        Some(&home),
+        Some(&applications),
+        None,
+        None,
+    );
+
+    assert_eq!(candidates, vec![local_cli, nvm_new, nvm_old, bundled_cli]);
 }
 
 #[test]
