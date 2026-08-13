@@ -128,7 +128,7 @@ AI 审核页用于查看分类、工作流分配、执行失败和人工修改�
 
 ### AI 一直不可用
 
-在设置中检查当前执行方式。API 模式需要有效密钥和网络；Codex 模式需要本机 Codex CLI 可执行且已登录。失败原因会保留在 AI 审核页。
+在设置中检查当前执行方式。API 模式需要有效密钥和网络；Codex 模式需要本机 Codex CLI 可执行且已登录。macOS 从 Finder 启动时不会继承终端 PATH，但 Orbit 会自动检查 `.local/bin`、Homebrew、npm/pnpm、nvm、Volta、Bun 和 ChatGPT 内置 CLI。仍不可用时，可运行 `command -v codex`，把结果作为绝对路径填入设置并点击「刷新并测试 Codex」。失败原因会保留在 AI 审核页。
 
 ### 工作流没有自动出现
 

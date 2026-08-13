@@ -93,19 +93,21 @@ dist/
 
 ### 构建 macOS 应用
 
-在 macOS 上生成 `.app` 应用包：
+在 macOS 上生成 `.app` 应用包，或同时生成 `.app` 和 DMG：
 
 ```shell
 pnpm tauri build --bundles app
+pnpm tauri build --bundles app,dmg
 ```
 
 应用输出到：
 
 ```text
 src-tauri/target/release/bundle/macos/Orbit.app
+src-tauri/target/release/bundle/dmg/
 ```
 
-该命令会自动先执行 `pnpm build`，再编译 Rust 后端并打包 macOS 应用。产物架构与当前 Mac 的 Rust 编译目标一致。
+该命令会自动先执行 `pnpm build`，再编译 Rust 后端并打包 macOS 应用。产物架构与当前 Mac 的 Rust 编译目标一致。当前 macOS 产物用于本地测试，尚未进行 Developer ID 签名和公证。
 
 ### 构建 Windows 独立版安装包
 

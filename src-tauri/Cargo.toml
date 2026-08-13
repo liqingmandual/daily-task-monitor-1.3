@@ -24,7 +24,7 @@ path = "src/lib.rs"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [[bin]]
-name = "Orbit"
+name = "daily-task-monitor"
 path = "src/main.rs"
 required-features = ["desktop"]
 

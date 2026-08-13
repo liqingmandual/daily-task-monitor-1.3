@@ -70,8 +70,9 @@ pnpm tauri dev
 
 Windows and macOS collector changes should be covered by both OS jobs in CI.
 Do not claim release-level OS support unless collection, permissions, packaging,
-and smoke tests have all been verified on that OS. The current macOS scope is
-local development with `pnpm tauri dev`, not public packaging.
+and smoke tests have all been verified on that OS. The current macOS scope
+includes local development plus unsigned local `.app`/DMG testing, not signed,
+notarized public distribution.
 
 ## Git
 

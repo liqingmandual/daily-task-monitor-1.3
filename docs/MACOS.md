@@ -2,9 +2,10 @@
 
 ## Current status and scope
 
-The current goal is local macOS development through `pnpm tauri dev`. Building,
-signing, notarizing, and distributing a `.app` or DMG is intentionally outside
-this phase.
+The supported macOS scope includes local development through `pnpm tauri dev`
+and local unsigned `.app`/DMG builds. The arm64 `.app` was built and smoke
+tested on a real Mac on 2026-08-13. Developer ID signing, notarization, and
+public distribution remain outside this phase.
 
 P0 trustworthy capture is accepted for this local-development scope. The
 real-device result and the successful cross-platform CI baseline are recorded
@@ -58,6 +59,42 @@ pnpm tauri dev
 
 If you do not want to install pnpm globally, use `npx --yes pnpm@10` in place
 of `pnpm`, for example `npx --yes pnpm@10 install --frozen-lockfile`.
+
+## Local application packaging
+
+Build a local `.app`, or build both local macOS bundle formats:
+
+```bash
+pnpm tauri build --bundles app
+pnpm tauri build --bundles app,dmg
+```
+
+The outputs are written below:
+
+```text
+src-tauri/target/release/bundle/macos/Orbit.app
+src-tauri/target/release/bundle/dmg/
+```
+
+Cargo keeps the internal target name `daily-task-monitor`; Tauri's
+`mainBinaryName` packages that target as `Orbit`. Keep those two settings
+aligned or bundling will look for the wrong release executable. Local builds
+may use an ad-hoc signature for testing. Do not present them as notarized public
+releases.
+
+## Codex CLI discovery
+
+A Finder-launched application does not inherit the interactive shell PATH.
+When the configured value is `codex`, Orbit therefore checks PATH plus common
+user installations under `.local`, npm, pnpm, nvm, Volta and Bun; Homebrew
+locations and the CLI bundled with ChatGPT are also considered. An explicit
+absolute path remains authoritative.
+
+Codex runs from a dedicated temporary `DailyTaskMonitor/data` directory rather
+than the application's launch directory. This keeps packaged launches
+independent of Finder's working directory. Failure to create that directory is
+reported as a working-directory error instead of being collapsed into a
+missing-executable message.
 
 Concurrent application instances are allowed for deliberate local multi-agent
 development. A SQLite lease now keeps exactly one collector authoritative per
