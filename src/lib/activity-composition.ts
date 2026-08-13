@@ -3,7 +3,7 @@ import { canonicalizeOverlappingSegments } from "./segment-overlap";
 
 export type { ActivityDisplayKey } from "./metrics";
 
-export type ActivityScope = "all" | "meaningful";
+export type ActivityScope = "all" | "active" | "meaningful";
 
 export type MeaningfulReason = "core" | "workflow_link" | "excluded";
 
@@ -23,7 +23,12 @@ export interface ActivityComposition {
 
 export interface ActivityCompositions {
   all: ActivityComposition;
+  active?: ActivityComposition;
   meaningful: ActivityComposition;
+}
+
+export interface CompleteActivityCompositions extends ActivityCompositions {
+  active: ActivityComposition;
 }
 
 export interface ActivityDisplayMeta {
@@ -129,7 +134,7 @@ export function getCompositionLearningSeconds(composition: ActivityComposition):
 }
 
 export function isActivityScope(value: unknown): value is ActivityScope {
-  return value === "all" || value === "meaningful";
+  return value === "all" || value === "active" || value === "meaningful";
 }
 
 export function parsePersistedActivityScope(value: unknown): ActivityScope {
@@ -139,6 +144,23 @@ export function parsePersistedActivityScope(value: unknown): ActivityScope {
 
 export function serializeActivityScope(scope: ActivityScope): string {
   return scope;
+}
+
+export function compositionForScope(
+  compositions: ActivityCompositions,
+  scope: ActivityScope,
+): ActivityComposition {
+  if (scope !== "active") return compositions[scope];
+  if (compositions.active) return compositions.active;
+  const items = compositions.all.items.filter((item) => item.category !== "idle");
+  const totalSeconds = items.reduce((total, item) => total + item.seconds, 0);
+  return {
+    totalSeconds,
+    items: items.map((item) => ({
+      ...item,
+      share: totalSeconds ? item.seconds / totalSeconds : 0,
+    })),
+  };
 }
 
 export function compositionToDonutItems(composition: ActivityComposition): ActivityCompositionDonutItem[] {
@@ -167,19 +189,22 @@ export function compositionToDonutItems(composition: ActivityComposition): Activ
 export function buildFallbackActivityCompositions(
   segments: readonly Segment[],
   _linkedActivityIds: ReadonlySet<string> = new Set(),
-): ActivityCompositions {
+): CompleteActivityCompositions {
   const all = new Map<ActivityDisplayKey, ActivityCompositionItem>();
+  const active = new Map<ActivityDisplayKey, ActivityCompositionItem>();
   const meaningful = new Map<ActivityDisplayKey, ActivityCompositionItem>();
   for (const segment of canonicalizeOverlappingSegments(segments)) {
     const seconds = Math.max(0, Math.round((segment.endMs - segment.startMs) / 1_000));
     if (!seconds) continue;
     const meta = displayMetaForActivity(segment.category, segment.videoPurpose);
     addCompositionSeconds(all, segment, meta, seconds);
+    if (segment.category !== "idle") addCompositionSeconds(active, segment, meta, seconds);
     const included = meta.meaningfulReason === "core";
     if (included) addCompositionSeconds(meaningful, segment, meta, seconds);
   }
   return {
     all: finishComposition(all),
+    active: finishComposition(active),
     meaningful: finishComposition(meaningful),
   };
 }

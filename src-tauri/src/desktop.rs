@@ -933,6 +933,9 @@ fn canonical_display_name(raw_name: &str, product_name: &str, executable_path: &
     {
         return "ChatGPT".into();
     }
+    if raw.eq_ignore_ascii_case("Code") && path.contains("\\visual studio code.app\\") {
+        return "Visual Studio Code".into();
+    }
     let product = product_name.trim();
     if !product.is_empty() {
         return product.into();
@@ -6191,6 +6194,14 @@ mod app_identity_tests {
         assert_eq!(
             canonical_display_name("codex", "Codex", r"C:\Users\me\bin\codex.exe"),
             "Codex"
+        );
+        assert_eq!(
+            canonical_display_name(
+                "Code",
+                "",
+                "/Applications/Visual Studio Code.app/Contents/MacOS/Electron"
+            ),
+            "Visual Studio Code"
         );
     }
 

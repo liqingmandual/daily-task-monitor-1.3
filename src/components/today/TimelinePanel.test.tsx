@@ -131,6 +131,24 @@ describe("TimelinePanel", () => {
     expect(html).toContain('data-app-icon="native"');
   });
 
+  it("labels macOS Visual Studio Code from its app bundle path", () => {
+    const html = renderToStaticMarkup(
+      <TimelinePanel
+        segments={[{
+          ...segments[0],
+          app: "Code",
+          appPath: "/Applications/Visual Studio Code.app/Contents/MacOS/Electron",
+        }]}
+        filter={{ mode: "all" }}
+        onFilterChange={() => {}}
+        onChangeClassification={() => {}}
+      />,
+    );
+
+    expect(html).toContain("Visual Studio Code");
+    expect(html).not.toContain(">Code</span>");
+  });
+
   it("renders an accessible marker only for exact pending review subjects", () => {
     const html = renderToStaticMarkup(
       <TimelinePanel

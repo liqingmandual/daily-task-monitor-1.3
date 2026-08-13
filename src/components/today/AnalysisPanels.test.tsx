@@ -150,6 +150,29 @@ describe("TodayAnalysisPanels", () => {
     expect(html).not.toContain("非娱乐活动");
   });
 
+  it("renders active composition after all and excludes idle time", () => {
+    const withIdle = [
+      ...segments,
+      { ...segments[0], id: "idle", startMs: 16 * 3_600_000, endMs: 17 * 3_600_000, app: "Idle", category: "idle" as const },
+    ];
+    const html = renderToStaticMarkup(
+      <TodayAnalysisPanels
+        metrics={buildDashboardMetrics(withIdle)}
+        activityCompositions={buildFallbackActivityCompositions(withIdle)}
+        activityScope="active"
+        onActivityScopeChange={() => {}}
+        selectedSeries={["active", "learning"]}
+        onSeriesChange={() => {}}
+        onDrill={() => {}}
+      />,
+    );
+
+    expect(html).toMatch(/>全部<\/button>.*>活跃<\/button>.*>学习<\/button>/);
+    expect(html).toContain('aria-pressed="true">活跃</button>');
+    expect(html).toContain("2 小时");
+    expect(html).not.toContain("不活跃</span>");
+  });
+
   it("drills a ranking identity by both raw app name and executable path", () => {
     expect(appRankingFilter({
       name: "Editor",

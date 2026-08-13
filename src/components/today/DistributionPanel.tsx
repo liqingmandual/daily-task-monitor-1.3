@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Activity } from "lucide-react";
 import {
   compositionToDonutItems,
+  compositionForScope,
   type ActivityCompositions,
   type ActivityDisplayKey,
   type ActivityScope,
@@ -27,7 +28,7 @@ export function DistributionPanel({
   previewResetKey?: string;
 }) {
   const [preview, setPreview] = useState<DonutSelection | null>(null);
-  const composition = activityCompositions[activityScope];
+  const composition = compositionForScope(activityCompositions, activityScope);
   useEffect(() => setPreview(null), [activityScope, composition, previewResetKey]);
   const rankedItems = useMemo(
     () => compositionToDonutItems(composition),
@@ -51,14 +52,15 @@ export function DistributionPanel({
       <PanelHeading eyebrow="COMPOSITION" title="活动构成" icon={<Activity size={18} />} />
       <div className="trend-composition-toggle" role="group" aria-label="今日活动构成口径">
         <button type="button" aria-pressed={activityScope === "all"} onClick={() => onActivityScopeChange("all")}>全部</button>
+        <button type="button" aria-pressed={activityScope === "active"} onClick={() => onActivityScopeChange("active")}>活跃</button>
         <button type="button" aria-pressed={activityScope === "meaningful"} onClick={() => onActivityScopeChange("meaningful")}>学习</button>
       </div>
     </div>
     {donutItems.length ? <>
       <div className="split-visual compact">
         <DonutChart
-          ariaLabel={`今日活动构成（${activityScope === "all" ? "完整时间口径" : "学习"}）`}
-          centerLabel={activityScope === "all" ? "全部活动" : "学习"}
+          ariaLabel={`今日活动构成（${activityScope === "all" ? "完整时间口径" : activityScope === "active" ? "活跃" : "学习"}）`}
+          centerLabel={activityScope === "all" ? "全部活动" : activityScope === "active" ? "活跃" : "学习"}
           centerValue={formatChartDuration(composition.totalSeconds)}
           items={donutItems}
           onPreview={setPreview}
@@ -89,7 +91,9 @@ export function DistributionPanel({
     </> : <div className="composition-empty" role="status">
       {activityScope === "meaningful"
         ? "当前日期没有符合规则的学习活动。"
-        : "当前日期暂无活动记录。"}
+        : activityScope === "active"
+          ? "当前日期暂无活跃活动。"
+          : "当前日期暂无活动记录。"}
     </div>}
   </article>;
 }

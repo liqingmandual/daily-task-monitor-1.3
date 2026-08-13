@@ -1361,6 +1361,9 @@ fn daily_analysis_scope_separates_evidence_and_pending_jobs() {
     database
         .insert_segment(&segment("game", ActivityCategory::Game, 61_000, 121_000))
         .unwrap();
+    database
+        .insert_segment(&segment("idle", ActivityCategory::Idle, 121_000, 181_000))
+        .unwrap();
     let service = AppService::new(database);
     let execution = execution_snapshot("openai", "gpt-frozen", 5_000);
 
@@ -1368,8 +1371,19 @@ fn daily_analysis_scope_separates_evidence_and_pending_jobs() {
         .queue_daily_analysis_scoped(
             "2026-07-12",
             0,
-            180_000,
+            240_000,
             ActivityScope::All,
+            5_000,
+            Some(&execution),
+        )
+        .unwrap()
+        .unwrap();
+    let active = service
+        .queue_daily_analysis_scoped(
+            "2026-07-12",
+            0,
+            240_000,
+            ActivityScope::Active,
             5_000,
             Some(&execution),
         )
@@ -1379,7 +1393,7 @@ fn daily_analysis_scope_separates_evidence_and_pending_jobs() {
         .queue_daily_analysis_scoped(
             "2026-07-12",
             0,
-            180_000,
+            240_000,
             ActivityScope::Meaningful,
             5_000,
             Some(&execution),
@@ -1391,13 +1405,23 @@ fn daily_analysis_scope_separates_evidence_and_pending_jobs() {
         all, meaningful,
         "a scope must not reuse the other scope's job"
     );
+    assert_ne!(all, active, "active scope must have its own job");
+    assert_ne!(
+        active, meaningful,
+        "active and learning scopes must stay distinct"
+    );
     let all_job = service.database().get_ai_job(&all).unwrap().unwrap();
+    let active_job = service.database().get_ai_job(&active).unwrap().unwrap();
     let meaningful_job = service.database().get_ai_job(&meaningful).unwrap().unwrap();
     let all_payload: serde_json::Value = serde_json::from_str(&all_job.payload_json).unwrap();
+    let active_payload: serde_json::Value = serde_json::from_str(&active_job.payload_json).unwrap();
     let meaningful_payload: serde_json::Value =
         serde_json::from_str(&meaningful_job.payload_json).unwrap();
     assert_eq!(all_payload["activityScope"], "all");
+    assert_eq!(active_payload["activityScope"], "active");
     assert_eq!(meaningful_payload["activityScope"], "meaningful");
+    assert_eq!(active_payload["idleSeconds"], 0);
+    assert_eq!(active_payload["activeSeconds"], 120);
     assert_ne!(
         all_payload["evidenceHash"], meaningful_payload["evidenceHash"],
         "excluded activity must change the evidence hash"

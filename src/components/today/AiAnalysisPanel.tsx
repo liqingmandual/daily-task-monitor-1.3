@@ -4,7 +4,7 @@ import type { ScopedDailyAnalysisResult } from "../../lib/desktop";
 import { PanelHeading } from "./analysis-shared";
 
 function activityScopeLabel(scope: ActivityScope): string {
-  return scope === "meaningful" ? "学习" : "全部";
+  return scope === "meaningful" ? "学习" : scope === "active" ? "活跃" : "全部";
 }
 
 export function AiAnalysisPanel({

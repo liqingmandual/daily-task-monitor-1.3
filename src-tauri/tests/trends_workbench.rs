@@ -204,6 +204,16 @@ fn trend_workbench_scope_filters_excluded_activity_and_changes_the_evidence_hash
             1.0,
         ))
         .unwrap();
+    database
+        .insert_segment(&segment(
+            "idle",
+            "2026-07-12",
+            120_000,
+            60_000,
+            ActivityCategory::Idle,
+            1.0,
+        ))
+        .unwrap();
     let request = request(
         "2026-07-12",
         "2026-07-12",
@@ -212,11 +222,18 @@ fn trend_workbench_scope_filters_excluded_activity_and_changes_the_evidence_hash
     );
 
     let all = get_trend_workbench_scoped(&database, request.clone(), ActivityScope::All).unwrap();
+    let active =
+        get_trend_workbench_scoped(&database, request.clone(), ActivityScope::Active).unwrap();
     let meaningful =
         get_trend_workbench_scoped(&database, request, ActivityScope::Meaningful).unwrap();
 
+    assert_eq!(all.summary.totals.monitored_seconds, 180);
     assert_eq!(all.summary.totals.active_seconds, 120);
+    assert_eq!(active.summary.totals.monitored_seconds, 120);
+    assert_eq!(active.summary.totals.active_seconds, 120);
     assert_eq!(meaningful.summary.totals.active_seconds, 60);
+    assert_ne!(all.evidence_hash, active.evidence_hash);
+    assert_ne!(active.evidence_hash, meaningful.evidence_hash);
     assert_ne!(all.evidence_hash, meaningful.evidence_hash);
 }
 

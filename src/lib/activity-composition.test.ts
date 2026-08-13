@@ -86,12 +86,13 @@ describe("activity composition UI persistence", () => {
     });
   });
 
-  it.each([null, "", "active", "MEANINGFUL", "{\"scope\":\"all\"}"])("falls back to all for invalid persisted scope %j", (value) => {
+  it.each([null, "", "MEANINGFUL", "{\"scope\":\"all\"}"])("falls back to all for invalid persisted scope %j", (value) => {
     expect(parsePersistedActivityScope(value)).toBe("all");
   });
 
   it("accepts each persisted activity scope exactly", () => {
     expect(parsePersistedActivityScope("all")).toBe("all");
+    expect(parsePersistedActivityScope("active")).toBe("active");
     expect(parsePersistedActivityScope("meaningful")).toBe("meaningful");
     expect(parsePersistedActivityScope("non_entertainment")).toBe("meaningful");
   });
@@ -155,6 +156,9 @@ describe("legacy/preview composition fallback", () => {
     ]);
 
     expect(result.all.totalSeconds).toBe(4 * 3_600);
+    expect(result.active.totalSeconds).toBe(3_600);
+    expect(result.active.items.map((item) => item.key)).toEqual(["research"]);
+    expect(result.active.items[0].share).toBe(1);
     expect(result.all.items.find((item) => item.key === "idle")?.seconds).toBe(3 * 3_600);
     expect(result.all.items.find((item) => item.key === "research")?.seconds).toBe(3_600);
     expect(result.meaningful.totalSeconds).toBe(3_600);

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef } from "react";
 
 import {
   activityDisplayRegistry,
+  compositionForScope,
   displayMetaForKey,
   type ActivityScope,
 } from "../../lib/activity-composition";
@@ -84,7 +85,9 @@ function legacyDisplayMeta(key: string) {
 }
 
 function scopedCategoryDistribution(bucket: TrendBucket, activityScope: ActivityScope): ActivityDisplaySlice[] {
-  const composition = bucket.activityComposition?.[activityScope];
+  const composition = bucket.activityComposition
+    ? compositionForScope(bucket.activityComposition, activityScope)
+    : undefined;
   if (composition) {
     return composition.items.map((item) => {
       const meta = displayMetaByKey.get(item.key);
@@ -116,7 +119,7 @@ function chartSlices(point: TrendChartPoint, activityScope: ActivityScope): Acti
     ...(point.activeSeconds > 0
       ? [{ key: "active", label: "活跃", color: "#2563eb", seconds: point.activeSeconds }]
       : []),
-    ...(point.idleSeconds > 0
+    ...(activityScope === "all" && point.idleSeconds > 0
       ? [{ key: "idle", label: "不活跃", color: "#94a3b8", seconds: point.idleSeconds }]
       : []),
   ];

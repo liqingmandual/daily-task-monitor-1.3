@@ -46,6 +46,7 @@ import {
   ACTIVITY_SCOPE_STORAGE_KEYS,
   activityDisplayRegistry,
   compositionToDonutItems,
+  compositionForScope,
   parsePersistedActivityScope,
   type ActivityComposition,
   type ActivityDisplayKey,
@@ -422,16 +423,21 @@ function TrendCompositionChart({
   onActivityScopeChange: (value: ActivityScope) => void;
   onSelectCategory: (value: ActivityDisplayKey) => void;
 }) {
-  const composition = workbenchPayload.activityComposition?.[activityScope]
-    ?? (activityScope === "all"
-      ? legacyAllActivityComposition(payload, workbenchPayload)
-      : emptyActivityComposition());
+  const composition = workbenchPayload.activityComposition
+    ? compositionForScope(workbenchPayload.activityComposition, activityScope)
+    : activityScope === "all" || activityScope === "active"
+      ? compositionForScope({
+        all: legacyAllActivityComposition(payload, workbenchPayload),
+        meaningful: emptyActivityComposition(),
+      }, activityScope)
+      : emptyActivityComposition();
   const items = compositionToDonutItems(composition);
   return <article className="trend-composition-card">
     <header>
-      <div><span>活动构成</span><strong>{activityScope === "all" ? "完整时间口径" : "学习"}</strong></div>
+      <div><span>活动构成</span><strong>{activityScope === "all" ? "完整时间口径" : activityScope === "active" ? "活跃" : "学习"}</strong></div>
       <div className="trend-composition-toggle" role="group" aria-label="趋势活动构成口径">
         <button type="button" aria-pressed={activityScope === "all"} onClick={() => onActivityScopeChange("all")}>全部</button>
+        <button type="button" aria-pressed={activityScope === "active"} onClick={() => onActivityScopeChange("active")}>活跃</button>
         <button type="button" aria-pressed={activityScope === "meaningful"} onClick={() => onActivityScopeChange("meaningful")}>学习</button>
       </div>
     </header>
@@ -709,14 +715,17 @@ export function TrendWorkbench({
     setSelectedBucketId(latestNonEmpty?.id ?? buckets.at(-1)?.id ?? null);
   }, [workbenchPayload?.evidenceHash]);
   useEffect(() => {
-    if (selectedActivityKey && !workbenchPayload?.activityComposition?.[activityScope].items.some((item) => item.key === selectedActivityKey)) {
+    if (selectedActivityKey && workbenchPayload?.activityComposition
+      && !compositionForScope(workbenchPayload.activityComposition, activityScope).items.some((item) => item.key === selectedActivityKey)) {
       setSelectedActivityKey(null);
     }
   }, [activityScope, selectedActivityKey, workbenchPayload?.activityComposition]);
   const selectCompositionCategory = (key: ActivityDisplayKey) => {
     setSelectedActivityKey(key);
     const matchingBucket = [...(workbenchPayload?.buckets ?? [])].reverse().find((bucket) => (
-      bucket.activityComposition?.[activityScope].items.some((item) => item.key === key)
+      bucket.activityComposition
+        ? compositionForScope(bucket.activityComposition, activityScope).items.some((item) => item.key === key)
+        : false
     ));
     if (matchingBucket) setSelectedBucketId(matchingBucket.id);
     queueMicrotask(() => {
@@ -797,7 +806,7 @@ export function TrendWorkbench({
               <TrendWeekdayChart points={trendChartPoints} formatDuration={formatDuration} />
             </article>
             <div className="trend-dashboard-analysis">
-              <p className="trend-analysis-scope">分析口径：{activityScope === "all" ? "全部活动" : "学习"}</p>
+              <p className="trend-analysis-scope">分析口径：{activityScope === "all" ? "全部活动" : activityScope === "active" ? "活跃" : "学习"}</p>
               <div className="trend-evaluation-actions">
                 <button
                   type="button"
@@ -817,7 +826,7 @@ export function TrendWorkbench({
                 analysis={analysisStatus === "ready" ? analysis : null}
                 analysisStatus={analysisStatus}
                 analysisError={analysisError}
-                evidence={activityScope === "meaningful"
+                evidence={activityScope !== "all"
                   ? (workbenchPayload?.analysisEvidence ?? [])
                   : (workbenchPayload?.evidence ?? [])}
                 evidenceHash={selectedAnalysisEvidenceHash}

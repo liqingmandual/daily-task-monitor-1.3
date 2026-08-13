@@ -6,6 +6,14 @@ describe("resolveDisplayName", () => {
     expect(resolveDisplayName("Code", "Visual Studio Code", "C:\\Program Files\\Microsoft VS Code\\Code.exe")).toBe("Visual Studio Code");
   });
 
+  it("recognizes Visual Studio Code from its macOS app bundle path", () => {
+    expect(resolveDisplayName(
+      "Code",
+      "",
+      "/Applications/Visual Studio Code.app/Contents/MacOS/Electron",
+    )).toBe("Visual Studio Code");
+  });
+
   it("keeps standalone Codex helpers named Codex", () => {
     expect(resolveDisplayName("codex", "Codex", "C:\\Users\\me\\bin\\codex.exe")).toBe("Codex");
     expect(resolveDisplayName("Codex", "", "")).toBe("Codex");

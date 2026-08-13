@@ -3526,7 +3526,7 @@ main { width: min(1600px, 100%); margin: 0 auto; padding: 20px 24px 48px; }
 }
 .app-frame .composition-panel-heading .panel-heading {
   margin-bottom: 0;
-  padding-right: 150px;
+  padding-right: 200px;
 }
 .app-frame .composition-panel-heading .trend-composition-toggle {
   position: absolute;

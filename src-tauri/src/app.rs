@@ -108,6 +108,7 @@ fn legacy_analysis_protocol() -> u8 {
 fn activity_scope_key(scope: ActivityScope) -> &'static str {
     match scope {
         ActivityScope::All => "all",
+        ActivityScope::Active => "active",
         ActivityScope::Meaningful => "meaningful",
     }
 }
@@ -593,6 +594,8 @@ impl AppService {
                     linked_activity_ids.contains(&segment.id),
                 )
             });
+        } else if activity_scope == ActivityScope::Active {
+            segments.retain(|segment| segment.category != ActivityCategory::Idle);
         }
         Ok(canonicalize_activity_segments(&segments, start_ms, end_ms))
     }
@@ -1499,13 +1502,14 @@ impl AppService {
         };
         let filtered_segments: Vec<_> = all_segments
             .into_iter()
-            .filter(|segment| {
-                activity_scope == ActivityScope::All
-                    || activity_is_meaningful(
-                        segment.category,
-                        segment.video_purpose,
-                        linked_activity_ids.contains(&segment.id),
-                    )
+            .filter(|segment| match activity_scope {
+                ActivityScope::All => true,
+                ActivityScope::Active => segment.category != ActivityCategory::Idle,
+                ActivityScope::Meaningful => activity_is_meaningful(
+                    segment.category,
+                    segment.video_purpose,
+                    linked_activity_ids.contains(&segment.id),
+                ),
             })
             .collect();
         let segments = canonicalize_activity_segments(&filtered_segments, start_ms, end_ms);

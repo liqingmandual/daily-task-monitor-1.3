@@ -28,6 +28,7 @@ pub enum VideoPurpose {
 #[serde(rename_all = "snake_case")]
 pub enum ActivityScope {
     All,
+    Active,
     Meaningful,
 }
 
@@ -89,6 +90,7 @@ pub struct ActivityComposition {
 #[serde(rename_all = "camelCase")]
 pub struct ActivityCompositions {
     pub all: ActivityComposition,
+    pub active: ActivityComposition,
     pub meaningful: ActivityComposition,
 }
 

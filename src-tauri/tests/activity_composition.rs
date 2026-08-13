@@ -94,7 +94,15 @@ fn authoritative_composition_merges_unknown_video_into_pending_and_learning_is_s
     ]);
 
     assert_eq!(composition.all.total_seconds, 130 * 60);
+    assert_eq!(composition.active.total_seconds, 120 * 60);
     assert_eq!(composition.meaningful.total_seconds, 40 * 60);
+    assert!(
+        !composition
+            .active
+            .items
+            .iter()
+            .any(|item| item.key == ActivityDisplayKey::Idle)
+    );
 
     let all_file = composition
         .all

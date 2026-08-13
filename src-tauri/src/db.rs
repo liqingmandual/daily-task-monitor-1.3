@@ -884,7 +884,7 @@ impl Database {
             );
             CREATE TABLE IF NOT EXISTS daily_analysis_scopes (
                 date TEXT NOT NULL,
-                activity_scope TEXT NOT NULL CHECK(activity_scope IN ('all', 'meaningful')),
+                activity_scope TEXT NOT NULL CHECK(activity_scope IN ('all', 'active', 'meaningful')),
                 evidence_hash TEXT NOT NULL,
                 portrait TEXT NOT NULL,
                 recommendation TEXT NOT NULL,
@@ -1683,6 +1683,36 @@ impl Database {
             // the freed pages for future writes.
             let _ = self.connection.execute_batch("VACUUM;");
             self.connection.execute_batch("PRAGMA user_version = 17;")?;
+        }
+        if version < 18 {
+            self.connection.execute_batch(
+                "
+                BEGIN IMMEDIATE;
+                ALTER TABLE daily_analysis_scopes RENAME TO daily_analysis_scopes_v17;
+                CREATE TABLE daily_analysis_scopes (
+                    date TEXT NOT NULL,
+                    activity_scope TEXT NOT NULL CHECK(activity_scope IN ('all', 'active', 'meaningful')),
+                    evidence_hash TEXT NOT NULL,
+                    portrait TEXT NOT NULL,
+                    recommendation TEXT NOT NULL,
+                    findings_json TEXT NOT NULL DEFAULT '[]',
+                    protocol_version INTEGER NOT NULL DEFAULT 1,
+                    source TEXT NOT NULL,
+                    generated_at_ms INTEGER NOT NULL,
+                    PRIMARY KEY(date, activity_scope)
+                );
+                INSERT INTO daily_analysis_scopes(
+                    date, activity_scope, evidence_hash, portrait, recommendation,
+                    findings_json, protocol_version, source, generated_at_ms
+                )
+                SELECT date, activity_scope, evidence_hash, portrait, recommendation,
+                       findings_json, protocol_version, source, generated_at_ms
+                FROM daily_analysis_scopes_v17;
+                DROP TABLE daily_analysis_scopes_v17;
+                PRAGMA user_version = 18;
+                COMMIT;
+                ",
+            )?;
         }
         Ok(())
     }
@@ -7043,6 +7073,7 @@ fn derived_progress_entry_id(
 fn activity_scope_key(scope: ActivityScope) -> &'static str {
     match scope {
         ActivityScope::All => "all",
+        ActivityScope::Active => "active",
         ActivityScope::Meaningful => "meaningful",
     }
 }

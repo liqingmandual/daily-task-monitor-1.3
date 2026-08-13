@@ -810,7 +810,7 @@ pub fn get_trend_workbench_scoped(
     };
     let canonical = serde_json::to_vec(&TrendWorkbenchEvidenceHashInput {
         range: &payload.range,
-        activity_scope: (activity_scope == ActivityScope::Meaningful).then_some(activity_scope),
+        activity_scope: (activity_scope != ActivityScope::All).then_some(activity_scope),
         granularity: payload.granularity,
         metric: payload.metric,
         metric_availability: &payload.metric_availability,
@@ -942,6 +942,10 @@ fn load_range(
                 linked_activity_ids.contains(segment.id.as_str()),
             )
         });
+    } else if activity_scope == ActivityScope::Active {
+        facts
+            .segments
+            .retain(|segment| segment.category != ActivityCategory::Idle);
     }
     facts.segments = canonicalize_activity_segments(
         &facts.segments,

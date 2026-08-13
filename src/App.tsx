@@ -52,6 +52,7 @@ import { buildAiReviewFilter, defaultAiReviewFilters, pendingReviewSubjectIds } 
 import {
   ACTIVITY_SCOPE_STORAGE_KEYS,
   buildFallbackActivityCompositions,
+  compositionForScope,
   displayMetaForActivity,
   getCompositionLearningSeconds,
   parsePersistedActivityScope,
@@ -555,10 +556,14 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
     ((metrics.monitoredSeconds - pendingSeconds) / Math.max(metrics.monitoredSeconds, 1)) * 100,
   );
   const localAnalysisEvidence = useMemo(() => {
-    const composition = activityCompositions[todayActivityScope];
+    const composition = compositionForScope(activityCompositions, todayActivityScope);
     const categorySeconds = Object.fromEntries(composition.items.map((item) => [item.key, item.seconds]));
     const idle = categorySeconds.idle ?? 0;
     const learning = getCompositionLearningSeconds(composition);
+    const scopedSegments = todayActivityScope === "active"
+      ? dashboardSegments.filter((segment) => segment.category !== "idle")
+      : dashboardSegments;
+    const compositionPendingSeconds = categorySeconds.pending ?? 0;
     const evidence = buildDailyAnalysisEvidence({
       date: selectedDate,
       goals: dailyGoal.goals,
@@ -568,20 +573,25 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
       activeSeconds: Math.max(0, composition.totalSeconds - idle),
       learningSeconds: learning,
       idleSeconds: idle,
-      switchCount: todayActivityScope === "all" ? totalSwitches : 0,
-      longestFocusSeconds: todayActivityScope === "all" ? longestFocus : 0,
+      switchCount: todayActivityScope === "meaningful" ? 0 : Math.max(0, scopedSegments.length - 1),
+      longestFocusSeconds: todayActivityScope === "meaningful" ? 0 : longestFocus,
       categorySeconds,
-      topApps: todayActivityScope === "all"
+      topApps: todayActivityScope !== "meaningful"
         ? metrics.apps.slice(0, 5).map((item) => ({ name: item.name, seconds: item.seconds }))
         : [],
       browserVisitCount: 0,
-      classificationCoverage: todayActivityScope === "all" ? classificationCoverage / 100 : 1,
+      classificationCoverage: todayActivityScope === "all"
+        ? classificationCoverage / 100
+        : todayActivityScope === "active"
+          ? (composition.totalSeconds - compositionPendingSeconds) / Math.max(composition.totalSeconds, 1)
+          : 1,
     });
     return { ...evidence, evidenceHash: `${todayActivityScope}:${evidence.evidenceHash}` };
-  }, [activityCompositions, classificationCoverage, dailyGoal, longestFocus, metrics.apps, selectedDate, todayActivityScope, totalSwitches]);
+  }, [activityCompositions, classificationCoverage, dailyGoal, dashboardSegments, longestFocus, metrics.apps, selectedDate, todayActivityScope, totalSwitches]);
   const localDailyAnalysis = useMemo<ScopedDailyAnalysisResult>(() => {
     const local = buildLocalDailyAnalysis(localAnalysisEvidence);
     if (todayActivityScope === "all") return { ...local, activityScope: "all" };
+    if (todayActivityScope === "active") return { ...local, activityScope: "active" };
     return {
       ...local,
       activityScope: "meaningful",

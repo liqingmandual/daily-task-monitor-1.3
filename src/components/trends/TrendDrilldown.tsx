@@ -108,7 +108,9 @@ export function TrendDrilldown({
   const data = bucket.drilldown;
   const currentValue = bucket.values[metric];
   const scopedRows = uniqueActivityRows(data.rawRows).filter((row) => (
-    activityScope === "all" || row.meaningful === true
+    activityScope === "all"
+      || activityScope === "active" && row.category !== "idle"
+      || activityScope === "meaningful" && row.meaningful === true
   ));
   const filteredRows = activityFilter
     ? scopedRows.filter((row) => activityMetaForRow(row)?.key === activityFilter)
@@ -145,7 +147,7 @@ export function TrendDrilldown({
       <section><h3>数据质量</h3><dl className="trend-quality-list"><div><dt>有效 / 缺失天</dt><dd>{data.dataQuality.recordedDayCount} / {data.dataQuality.missingDayCount}</dd></div><div><dt>分类覆盖</dt><dd>{Math.round(data.dataQuality.classificationCoverage * 100)}%</dd></div><div><dt>低置信</dt><dd>{formatDuration(data.dataQuality.lowConfidenceSeconds)}</dd></div><div><dt>待处理</dt><dd>{formatDuration(data.dataQuality.pendingSeconds)}</dd></div></dl></section>
     </div>
     <section className="trend-activity-evidence" aria-label="活动证据明细">
-      <h3>{filterLabel ? `${filterLabel}证据` : activityScope === "meaningful" ? "学习活动证据" : "活动证据"}</h3>
+      <h3>{filterLabel ? `${filterLabel}证据` : activityScope === "meaningful" ? "学习活动证据" : activityScope === "active" ? "活跃活动证据" : "活动证据"}</h3>
       {filteredRows.length === 0 ? <Empty>当前筛选下没有活动证据</Empty> : <div className="trend-table-scroll"><table className="trend-data-table"><thead><tr><th>日期 / 时间</th><th>应用</th><th>分类</th><th>任务</th><th>时长</th></tr></thead><tbody>{filteredRows.slice(0, 50).map((row) => {
         const meta = activityMetaForRow(row);
         return <tr key={`${row.evidenceId}-${row.date}-${row.startTime}-${row.endTime}`}><th>{row.date}<small>{row.startTime}–{row.endTime}</small></th><td>{row.app}</td><td>{meta?.label ?? row.category}</td><td>{row.taskId && row.taskTitle && onOpenTask ? <button type="button" className="trend-link-button" onClick={() => onOpenTask(row.taskId!)}>{row.taskTitle}</button> : (row.taskTitle ?? "—")}</td><td>{formatDuration(row.clippedDurationSeconds)}</td></tr>;

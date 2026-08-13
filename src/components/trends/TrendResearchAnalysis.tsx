@@ -132,7 +132,7 @@ export function TrendResearchAnalysis({
   return (
     <section className="trend-evaluation-panel trend-research-analysis" aria-labelledby="trend-research-heading">
       <header className="trend-section-heading">
-        <div><h2 id="trend-research-heading">AI 趋势洞察 <small>（{activityScope === "all" ? "全部活动" : "学习"} · 基于事实）</small></h2></div>
+        <div><h2 id="trend-research-heading">AI 趋势洞察 <small>（{activityScope === "all" ? "全部活动" : activityScope === "active" ? "活跃" : "学习"} · 基于事实）</small></h2></div>
       </header>
 
       {analysisStatus === "loading" && <p className="trend-analysis-feedback" role="status">正在读取研究分析...</p>}

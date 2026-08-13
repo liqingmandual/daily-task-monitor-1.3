@@ -99,6 +99,7 @@ pub fn build_activity_compositions(
     }
 
     let mut all = BTreeMap::<ActivityDisplayKey, AggregateItem>::new();
+    let mut active = BTreeMap::<ActivityDisplayKey, AggregateItem>::new();
     let mut meaningful = BTreeMap::<ActivityDisplayKey, AggregateItem>::new();
     for slice in deduplicated.into_values() {
         let key = activity_display_key(slice.category, slice.video_purpose);
@@ -116,6 +117,16 @@ pub fn build_activity_compositions(
             reason,
             slice.seconds,
         );
+        if slice.category != ActivityCategory::Idle {
+            add_seconds(
+                &mut active,
+                key,
+                display_category,
+                display_video_purpose,
+                reason,
+                slice.seconds,
+            );
+        }
         if activity_is_meaningful(slice.category, slice.video_purpose, slice.workflow_linked) {
             add_seconds(
                 &mut meaningful,
@@ -130,6 +141,7 @@ pub fn build_activity_compositions(
 
     ActivityCompositions {
         all: finish_composition(all),
+        active: finish_composition(active),
         meaningful: finish_composition(meaningful),
     }
 }

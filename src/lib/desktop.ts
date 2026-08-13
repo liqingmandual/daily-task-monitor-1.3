@@ -14,6 +14,7 @@ import type {
   ActivityScope,
   MeaningfulReason,
 } from "./activity-composition";
+import { isActivityScope } from "./activity-composition";
 
 export const ANALYSIS_CHANGED_EVENT = "analysis-changed";
 export const OPEN_SETTINGS_EVENT = "open-settings";
@@ -1428,7 +1429,7 @@ export async function loadDailyAnalysis(
     endMs,
     activityScope,
   });
-  return { ...result, activityScope: result.activityScope === "meaningful" ? "meaningful" : "all" };
+  return { ...result, activityScope: isActivityScope(result.activityScope) ? result.activityScope : "all" };
 }
 
 export async function enqueueDailyAnalysis(
@@ -1826,7 +1827,7 @@ export async function loadTrendAnalysis(
     "get_trend_analysis",
     { ...buildTrendRangeArguments(startDate, endDate), activityScope },
   );
-  return { ...result, activityScope: result.activityScope === "meaningful" ? "meaningful" : "all" };
+  return { ...result, activityScope: isActivityScope(result.activityScope) ? result.activityScope : "all" };
 }
 
 export async function queueTrendAnalysis(
@@ -1849,7 +1850,7 @@ export async function loadTrendResearchAnalysis(
     "get_trend_research_analysis",
     { request, activityScope: request.activityScope ?? "all" },
   );
-  return { ...result, activityScope: result.activityScope === "meaningful" ? "meaningful" : "all" };
+  return { ...result, activityScope: isActivityScope(result.activityScope) ? result.activityScope : "all" };
 }
 
 export async function queueTrendResearchAnalysis(

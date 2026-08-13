@@ -1084,7 +1084,7 @@ fn trend_range_segment_query_clips_records_to_requested_bounds() {
 }
 
 #[test]
-fn scoped_daily_analysis_cache_keeps_all_and_meaningful_results_independent() {
+fn scoped_daily_analysis_cache_keeps_all_active_and_meaningful_results_independent() {
     let db = Database::open_in_memory().unwrap();
     let record = |evidence_hash: &str, portrait: &str| DailyAnalysisRecord {
         date: "2026-08-07".into(),
@@ -1100,6 +1100,11 @@ fn scoped_daily_analysis_cache_keeps_all_and_meaningful_results_independent() {
     db.save_daily_analysis_scoped(ActivityScope::All, &record("all-hash", "all result"))
         .unwrap();
     db.save_daily_analysis_scoped(
+        ActivityScope::Active,
+        &record("active-hash", "active result"),
+    )
+    .unwrap();
+    db.save_daily_analysis_scoped(
         ActivityScope::Meaningful,
         &record("meaningful-hash", "meaningful result"),
     )
@@ -1113,10 +1118,90 @@ fn scoped_daily_analysis_cache_keeps_all_and_meaningful_results_independent() {
         "all result"
     );
     assert_eq!(
+        db.get_daily_analysis_scoped("2026-08-07", ActivityScope::Active)
+            .unwrap()
+            .unwrap()
+            .portrait,
+        "active result"
+    );
+    assert_eq!(
         db.get_daily_analysis_scoped("2026-08-07", ActivityScope::Meaningful)
             .unwrap()
             .unwrap()
             .portrait,
         "meaningful result"
     );
+}
+
+#[test]
+fn v18_migration_preserves_scoped_analysis_and_allows_active_scope() {
+    let path = std::env::temp_dir().join(format!(
+        "daily-task-monitor-active-scope-migration-{}-{}.db",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    {
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "
+                CREATE TABLE daily_analysis_scopes (
+                    date TEXT NOT NULL,
+                    activity_scope TEXT NOT NULL CHECK(activity_scope IN ('all', 'meaningful')),
+                    evidence_hash TEXT NOT NULL,
+                    portrait TEXT NOT NULL,
+                    recommendation TEXT NOT NULL,
+                    findings_json TEXT NOT NULL DEFAULT '[]',
+                    protocol_version INTEGER NOT NULL DEFAULT 1,
+                    source TEXT NOT NULL,
+                    generated_at_ms INTEGER NOT NULL,
+                    PRIMARY KEY(date, activity_scope)
+                );
+                INSERT INTO daily_analysis_scopes VALUES (
+                    '2026-08-07', 'meaningful', 'old-hash', 'old result', 'next',
+                    '[]', 2, 'ai', 1
+                );
+                PRAGMA user_version = 17;
+                ",
+            )
+            .unwrap();
+    }
+
+    let record = DailyAnalysisRecord {
+        date: "2026-08-07".into(),
+        evidence_hash: "active-hash".into(),
+        portrait: "active result".into(),
+        recommendation: "next".into(),
+        findings_json: "[]".into(),
+        protocol_version: 2,
+        source: "ai".into(),
+        generated_at_ms: 2,
+    };
+    {
+        let database = Database::open(&path).unwrap();
+        assert_eq!(
+            database
+                .get_daily_analysis_scoped("2026-08-07", ActivityScope::Meaningful)
+                .unwrap()
+                .unwrap()
+                .portrait,
+            "old result"
+        );
+        database
+            .save_daily_analysis_scoped(ActivityScope::Active, &record)
+            .unwrap();
+    }
+    Database::open(&path).unwrap();
+    let connection = Connection::open(&path).unwrap();
+    assert_eq!(
+        connection
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        18
+    );
+    drop(connection);
+    let _ = std::fs::remove_file(path);
 }

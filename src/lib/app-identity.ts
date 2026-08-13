@@ -16,6 +16,12 @@ const BUILTIN_ALIASES: Record<string, string> = {
   explorer: "File Explorer",
 };
 
+function isMacVisualStudioCode(rawName: string, executablePath: string): boolean {
+  const path = executablePath.replaceAll("\\", "/").toLowerCase();
+  return rawName.trim().toLowerCase() === "code"
+    && path.includes("/visual studio code.app/");
+}
+
 function isPackagedChatGpt(rawName: string, executablePath: string): boolean {
   const path = executablePath.replaceAll("/", "\\").toLowerCase();
   return rawName.trim().toLowerCase() === "chatgpt"
@@ -26,6 +32,7 @@ function isPackagedChatGpt(rawName: string, executablePath: string): boolean {
 export function resolveDisplayName(rawName: string, productName = "", executablePath = ""): string {
   const raw = rawName.trim();
   if (isPackagedChatGpt(raw, executablePath)) return "ChatGPT";
+  if (isMacVisualStudioCode(raw, executablePath)) return "Visual Studio Code";
   const product = productName.trim();
   if (product) return product;
   return BUILTIN_ALIASES[raw.toLowerCase()] ?? raw;
