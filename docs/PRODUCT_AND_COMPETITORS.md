@@ -16,6 +16,8 @@ optional AI constrained by locally verified facts.
 - Five-second foreground application sampling on Windows and macOS.
 - Window title, executable identity, idle detection, and continuity repair.
 - Read-only Chromium history collection with URL credential/query redaction.
+- Authenticated loopback browser watchers that measure active-tab duration for
+  Chromium, Firefox, and converted Safari extensions.
 - Local SQLite storage, manual exclusions, and manual classification overrides.
 - Today, trends, comparison ranges, workflow/task ledger, AI review, knowledge
   graph, and Markdown/DOCX export.
@@ -66,8 +68,9 @@ Reference: <https://timingapp.com/help/faq>
 
 ## Product gaps
 
-1. Website duration is currently inferred from Chromium history and foreground
-   browser activity rather than measured from active-tab heartbeats.
+1. Authoritative website duration requires an installed browser watcher;
+   browser history remains visit evidence, and browsers without a connected
+   watcher have no measured active-tab duration.
 2. There is no cross-device event synchronization or conflict model.
 3. Classification corrections do not yet offer a complete transparent
    "apply once / create future rule" learning loop.
@@ -88,9 +91,9 @@ Reference: <https://timingapp.com/help/faq>
 - [x] Add browser watcher protocol v1 and local extension sources for Chromium,
   Firefox, and Safari; history visits remain separate from measured duration.
 - [x] Add permission diagnostics and an explicit collection-health screen.
-- [ ] Keep Windows and macOS collector tests green in CI. The final real-device
-  macOS regression is recorded; the two-platform CI matrix is configured and
-  now runs for every pushed branch.
+- [x] Keep Windows and macOS collector tests green in CI. Run 12 at P0 closure
+  commit `19ae652` passed frontend, extension, Rust, and Windows independent
+  desktop jobs across the configured Windows/macOS matrix.
 
 Signed, notarized macOS packaging is deliberately deferred until a later
 distribution phase.
@@ -109,10 +112,9 @@ distribution phase.
 
 - Add activity-aware 25/30/45/50-minute break reminders that defer during
   meetings, video playback, presentation, idle, or lock screen.
-- Refresh the frontend visual system after P0 capture reliability is complete:
-  audit information hierarchy, define reusable typography/color/spacing and
-  chart tokens, simplify dense dashboard surfaces, and align empty, loading,
-  error, hover, and focus states across Today, Trends, Workflow, and AI Review.
+- Finish the visual-system validation started by the Orbit UI refresh: audit
+  remaining empty, loading, error, hover, and focus states across Today,
+  Trends, Workflow, and AI Review.
 - Validate the visual refresh at common desktop window sizes and for keyboard
   navigation, contrast, reduced motion, and light/dark appearance before
   treating it as complete.

@@ -25,7 +25,7 @@ Do not include captured titles, URLs, executable paths, or watcher tokens.
 | Firefox watcher | Active public tabs create measured heartbeat slices |  |  |
 | Safari watcher | Converted extension creates measured heartbeat slices |  |  |
 | Pause monitoring | Desktop and browser watcher stop persisting activity |  |  |
-| Second launch | Existing instance remains authoritative; no duplicate collector |  |  |
+| Concurrent development launch | Additional local instance may run; record shared-storage behavior and keep one collector per database for acceptance |  |  |
 
 ## Automated evidence
 
@@ -35,6 +35,7 @@ pnpm build:
 pnpm run build:extensions:
 cargo test --manifest-path src-tauri/Cargo.toml --all-targets:
 scripts/macos-p0-smoke.sh:
+repository CI run:
 ```
 
 ## Decision

@@ -29,6 +29,9 @@ capture, key contents, cookies, or form contents.
 - `docs/BROWSER_WATCHER.md`: watcher privacy boundary, protocol, and setup.
 - `docs/UI_DESIGN_COMPASS.md`: shared visual language and UI direction.
 
+P0 trustworthy capture was accepted on a real macOS device and closed by the
+successful Windows/macOS CI run recorded in `docs/MACOS_P0_ACCEPTANCE.md`.
+
 ## Development rules
 
 - Preserve the local-first default and make every cloud/AI path opt-in.
@@ -40,6 +43,10 @@ capture, key contents, cookies, or form contents.
 - Store secrets through `keyring`; never put API keys in SQLite or logs.
 - Use `rg` for repository searches and `apply_patch` for hand edits.
 - Keep unrelated user changes intact.
+- Concurrent desktop instances are intentionally allowed for local multi-agent
+  development. Do not restore a process-wide single-instance lock without an
+  explicit product decision. Use one collector per database for acceptance
+  runs so captured evidence has one clear authority.
 
 ## Validation
 
