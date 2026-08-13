@@ -1,3 +1,5 @@
+*.png
+!docs/images/orbit-overview.png
 node_modules/
 .DS_Store
 dist/
