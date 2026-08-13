@@ -17,6 +17,20 @@ import type {
 
 export const ANALYSIS_CHANGED_EVENT = "analysis-changed";
 export const OPEN_SETTINGS_EVENT = "open-settings";
+export const FOCUS_TIMER_CHANGED_EVENT = "focus-timer-changed";
+
+export interface FocusTimerStatus {
+  sessionId: string;
+  goalDate: string;
+  goalText: string;
+  plannedMinutes: number;
+  startedAtMs: number;
+  endsAtMs: number;
+  remainingSeconds: number;
+  expired: boolean;
+  paused: boolean;
+  taskId: string | null;
+}
 
 export interface AnalysisChangedEvent {
   page: "daily" | "trends";
@@ -1249,6 +1263,10 @@ export async function beginFocus(
   return invoke<string>("start_focus_session", { goalDate: date, goalText, plannedMinutes, taskId });
 }
 
+export async function getFocusTimerStatus(): Promise<FocusTimerStatus | null> {
+  return invoke<FocusTimerStatus | null>("get_focus_timer_status");
+}
+
 export async function completeFocus(id: string, outcome: string): Promise<boolean> {
   return invoke<boolean>("complete_focus_session", { id, outcome });
 }
@@ -1437,6 +1455,14 @@ export async function listenCollectionHealthChanged(
 
 export async function listenOpenSettings(handler: () => void): Promise<UnlistenFn> {
   return listen<void>(OPEN_SETTINGS_EVENT, handler);
+}
+
+export async function listenFocusTimerChanged(
+  handler: (status: FocusTimerStatus | null) => void,
+): Promise<UnlistenFn> {
+  return listen<FocusTimerStatus | null>(FOCUS_TIMER_CHANGED_EVENT, (event) => {
+    handler(event.payload);
+  });
 }
 
 export async function listBrowserSources(): Promise<BrowserSource[]> {

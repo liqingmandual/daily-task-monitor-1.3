@@ -178,7 +178,7 @@ fn migration_creates_review_event_and_manual_ownership_tables_idempotently() {
         connection
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        11
+        13
     );
     drop(connection);
     let _ = std::fs::remove_file(path);

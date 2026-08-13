@@ -21,6 +21,7 @@ import {
   getAiConnectionHealth,
   getCodexHealth,
   getCollectionHealth,
+  getFocusTimerStatus,
   getDailyGoal,
   listDailyGoalTaskLinks,
   recordDailyActualOutputProgress,
@@ -30,6 +31,7 @@ import {
   listenActivityChanged,
   listenCollectionHealthChanged,
   listenOpenSettings,
+  listenFocusTimerChanged,
   testCodexCli,
   loadTrendAnalysis,
   loadTrendRange,
@@ -102,6 +104,34 @@ describe("desktop bridge", () => {
     await expect(listenOpenSettings(onOpen)).resolves.toBe(stop);
 
     expect(listen).toHaveBeenCalledWith("open-settings", onOpen);
+  });
+
+  it("loads and subscribes to the persisted focus countdown", async () => {
+    const status = {
+      sessionId: "focus-1",
+      goalDate: "2026-08-13",
+      goalText: "Ship timer",
+      plannedMinutes: 25,
+      startedAtMs: 1_000,
+      endsAtMs: 1_501_000,
+      remainingSeconds: 1_500,
+      expired: false,
+      paused: false,
+      taskId: null,
+    };
+    const stop = vi.fn();
+    const onChanged = vi.fn();
+    vi.mocked(invoke).mockResolvedValueOnce(status);
+    vi.mocked(listen).mockResolvedValueOnce(stop);
+
+    await expect(getFocusTimerStatus()).resolves.toBe(status);
+    await expect(listenFocusTimerChanged(onChanged)).resolves.toBe(stop);
+
+    expect(invoke).toHaveBeenCalledWith("get_focus_timer_status");
+    expect(listen).toHaveBeenCalledWith("focus-timer-changed", expect.any(Function));
+    const eventHandler = vi.mocked(listen).mock.calls[0][1];
+    eventHandler({ payload: status } as never);
+    expect(onChanged).toHaveBeenCalledWith(status);
   });
 
   it("accepts an inclusive 366-day trend range", () => {

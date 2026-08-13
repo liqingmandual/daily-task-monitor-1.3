@@ -52,6 +52,23 @@ Today 页按固定阅读顺序组合：页面标题、核心指标、任务分�
 
 桌面端的权威证据由 Rust `AppService` 从 SQLite 的活动、目标和浏览记录构造。它使用实际浏览记录数与未取整的覆盖率，对规范化后的序列化证据计算 SHA-256；该哈希用于保存结果的有效性判断、`ai_jobs` 去重/排队，以及仅在当前证据哈希匹配时替换 AI 分析。`AiAnalysisPanel` 显示的是 Tauri 返回的权威结果；在离线、失败或等待补算时，Rust 同样基于该权威证据生成本地分析，避免把前端预览与持久化统计混淆。
 
+### Focus 番茄钟
+
+运行中的番茄钟以 SQLite `focus_sessions` 中最新的未完成会话为权威状态，
+结束时间由 `started_at_ms + planned_minutes + paused_total_ms` 确定；当前暂停
+时间由 `paused_at_ms` 冻结，恢复时再累计。React 在启动或重新打开窗口时恢复
+该状态。独立的 `CompactFocusControl` 按真实秒边界更新时间，并把同一个剩余
+秒数交给顶部按钮和 Focus 弹层；弹层的数字节点随秒数替换，确保 WKWebView
+及时重绘，同时避免整个 Dashboard 每秒重新渲染。
+
+桌面端工作线程每秒更新 macOS 托盘标题 `🍅 mm:ss`，但只在开始、暂停、
+继续、结束或其他结构状态变化时通知 React。数据库通过部分唯一索引保证每个
+存储只有一个未结束会话；菜单栏提供开始、暂停/继续和结束三个显式控制项。
+任何控制入口完成写入后立即发布同一结构状态到 React、托盘标题和菜单项，
+避免等待后台轮询造成短暂不一致。到时后通过同一条数据库更新原子完成会话并
+写入 `notified_at_ms`，避免多个实例重复结束或提醒；界面随即清除计时状态，
+不创建虚假的任务产出。Windows 托盘不设置标题。
+
 ## Trend intelligence backend
 
 `get_trends` remains the authoritative range boundary contract. Trend analysis commands accept the same inclusive current/comparison dates and explicit local-day boundary arrays, rebuild one authoritative `TrendPayload`, and key every saved result by `(range_start, range_end, evidence_hash)`. Exact-hash lookup means an older provider completion can remain auditable without replacing or being returned for newer evidence from the same range.

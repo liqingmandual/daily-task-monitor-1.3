@@ -198,6 +198,9 @@ pub struct FocusSessionRecord {
     pub ended_at_ms: Option<i64>,
     pub outcome: String,
     pub task_id: Option<String>,
+    pub paused_at_ms: Option<i64>,
+    pub paused_total_ms: i64,
+    pub notified_at_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1533,6 +1536,58 @@ impl Database {
                 ",
             )?;
         }
+        if version < 12 {
+            let transaction = self.connection.unchecked_transaction()?;
+            if !Self::table_has_column(&transaction, "focus_sessions", "paused_at_ms")? {
+                transaction.execute(
+                    "ALTER TABLE focus_sessions ADD COLUMN paused_at_ms INTEGER",
+                    [],
+                )?;
+            }
+            if !Self::table_has_column(&transaction, "focus_sessions", "paused_total_ms")? {
+                transaction.execute(
+                    "ALTER TABLE focus_sessions ADD COLUMN paused_total_ms INTEGER NOT NULL DEFAULT 0",
+                    [],
+                )?;
+            }
+            if !Self::table_has_column(&transaction, "focus_sessions", "notified_at_ms")? {
+                transaction.execute(
+                    "ALTER TABLE focus_sessions ADD COLUMN notified_at_ms INTEGER",
+                    [],
+                )?;
+            }
+            transaction.execute_batch("PRAGMA user_version = 12;")?;
+            transaction.commit()?;
+        }
+        if version < 13 {
+            let transaction = self.connection.unchecked_transaction()?;
+            let migrated_at_ms = now_millis();
+            transaction.execute(
+                "UPDATE focus_sessions
+                 SET ended_at_ms=MAX(
+                        started_at_ms,
+                        MIN(
+                            ?1,
+                            started_at_ms + planned_minutes * 60000 + paused_total_ms
+                        )
+                     ),
+                     paused_at_ms=NULL
+                 WHERE ended_at_ms IS NULL
+                   AND id NOT IN (
+                        SELECT id FROM focus_sessions
+                        WHERE ended_at_ms IS NULL
+                        ORDER BY started_at_ms DESC, id DESC
+                        LIMIT 1
+                   )",
+                [migrated_at_ms],
+            )?;
+            transaction.execute_batch(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_focus_sessions_single_active
+                    ON focus_sessions((1)) WHERE ended_at_ms IS NULL;
+                 PRAGMA user_version = 13;",
+            )?;
+            transaction.commit()?;
+        }
         Ok(())
     }
 
@@ -2418,6 +2473,67 @@ impl Database {
         Ok(())
     }
 
+    pub fn start_focus_session_for_task_if_none(
+        &self,
+        id: &str,
+        goal_date: &str,
+        goal_text: &str,
+        planned_minutes: u32,
+        started_at_ms: i64,
+        task_id: Option<&str>,
+    ) -> Result<bool> {
+        Ok(self.connection.execute(
+            "INSERT INTO focus_sessions(
+                id, goal_date, goal_text, planned_minutes, started_at_ms, task_id
+             )
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6
+             WHERE NOT EXISTS (
+                SELECT 1 FROM focus_sessions WHERE ended_at_ms IS NULL
+             )",
+            params![
+                id,
+                goal_date,
+                goal_text,
+                planned_minutes.clamp(1, 240),
+                started_at_ms,
+                task_id,
+            ],
+        )? == 1)
+    }
+
+    pub fn pause_focus_session(&self, id: &str, paused_at_ms: i64) -> Result<bool> {
+        Ok(self.connection.execute(
+            "UPDATE focus_sessions SET paused_at_ms=?2
+             WHERE id=?1 AND ended_at_ms IS NULL AND paused_at_ms IS NULL",
+            params![id, paused_at_ms],
+        )? == 1)
+    }
+
+    pub fn resume_focus_session(&self, id: &str, resumed_at_ms: i64) -> Result<bool> {
+        Ok(self.connection.execute(
+            "UPDATE focus_sessions
+             SET paused_total_ms=paused_total_ms +
+                    CASE WHEN ?2 > paused_at_ms THEN ?2 - paused_at_ms ELSE 0 END,
+                 paused_at_ms=NULL
+             WHERE id=?1 AND ended_at_ms IS NULL AND paused_at_ms IS NOT NULL",
+            params![id, resumed_at_ms],
+        )? == 1)
+    }
+
+    pub fn complete_expired_focus_session(
+        &self,
+        id: &str,
+        ended_at_ms: i64,
+        notified_at_ms: i64,
+    ) -> Result<bool> {
+        Ok(self.connection.execute(
+            "UPDATE focus_sessions
+             SET ended_at_ms=?2, notified_at_ms=?3, paused_at_ms=NULL
+             WHERE id=?1 AND ended_at_ms IS NULL AND notified_at_ms IS NULL",
+            params![id, ended_at_ms, notified_at_ms],
+        )? == 1)
+    }
+
     pub fn complete_focus_session(
         &self,
         id: &str,
@@ -2445,7 +2561,13 @@ impl Database {
             return Ok(false);
         }
         transaction.execute(
-            "UPDATE focus_sessions SET ended_at_ms=?2, outcome=?3
+            "UPDATE focus_sessions
+             SET ended_at_ms=?2,
+                 outcome=?3,
+                 paused_total_ms=paused_total_ms + CASE
+                    WHEN paused_at_ms IS NOT NULL AND ?2 > paused_at_ms
+                    THEN ?2 - paused_at_ms ELSE 0 END,
+                 paused_at_ms=NULL
              WHERE id=?1 AND ended_at_ms IS NULL",
             params![id, ended_at_ms, outcome],
         )?;
@@ -2473,7 +2595,7 @@ impl Database {
     ) -> Result<Vec<FocusSessionRecord>> {
         let mut statement = self.connection.prepare(
             "SELECT id, goal_date, goal_text, planned_minutes, started_at_ms, ended_at_ms, outcome,
-                    task_id
+                    task_id, paused_at_ms, paused_total_ms, notified_at_ms
              FROM focus_sessions
              WHERE started_at_ms < ?2 AND COALESCE(ended_at_ms, started_at_ms) > ?1
              ORDER BY started_at_ms ASC, id ASC",
@@ -2489,9 +2611,41 @@ impl Database {
                     ended_at_ms: row.get(5)?,
                     outcome: row.get(6)?,
                     task_id: row.get(7)?,
+                    paused_at_ms: row.get(8)?,
+                    paused_total_ms: row.get(9)?,
+                    notified_at_ms: row.get(10)?,
                 })
             })?
             .collect()
+    }
+
+    pub fn active_focus_session(&self) -> Result<Option<FocusSessionRecord>> {
+        self.connection
+            .query_row(
+                "SELECT id, goal_date, goal_text, planned_minutes, started_at_ms, ended_at_ms,
+                        outcome, task_id, paused_at_ms, paused_total_ms, notified_at_ms
+                 FROM focus_sessions
+                 WHERE ended_at_ms IS NULL
+                 ORDER BY started_at_ms DESC, id DESC
+                 LIMIT 1",
+                [],
+                |row| {
+                    Ok(FocusSessionRecord {
+                        id: row.get(0)?,
+                        goal_date: row.get(1)?,
+                        goal_text: row.get(2)?,
+                        planned_minutes: row.get(3)?,
+                        started_at_ms: row.get(4)?,
+                        ended_at_ms: row.get(5)?,
+                        outcome: row.get(6)?,
+                        task_id: row.get(7)?,
+                        paused_at_ms: row.get(8)?,
+                        paused_total_ms: row.get(9)?,
+                        notified_at_ms: row.get(10)?,
+                    })
+                },
+            )
+            .optional()
     }
 
     pub fn save_daily_goal(

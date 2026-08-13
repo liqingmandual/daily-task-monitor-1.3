@@ -102,6 +102,15 @@ Reference: <https://timingapp.com/help/faq>
 Signed, notarized macOS packaging is deliberately deferred until a later
 distribution phase.
 
+### Pre-P1: focus visibility
+
+- [x] Restore the running Focus session from SQLite and show one synchronized,
+  second-level countdown in the dashboard header and Focus popover.
+- [x] Show the same countdown in the macOS menu bar while leaving the Windows
+  tray presentation unchanged.
+- [x] Control one persisted Focus session from the macOS tray with explicit
+  start, pause/continue, and end actions, plus a deduplicated completion notification.
+
 ### P1: explainable organization and sync
 
 - Show facts, derived aggregates, classification inference, and suggestions as

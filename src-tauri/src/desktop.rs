@@ -10,9 +10,9 @@ use directories::{ProjectDirs, UserDirs};
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tauri::menu::MenuBuilder;
 #[cfg(target_os = "macos")]
-use tauri::menu::{Menu, MenuItem, MenuItemKind, PredefinedMenuItem};
+use tauri::menu::{Menu, MenuItemKind, PredefinedMenuItem};
+use tauri::menu::{MenuBuilder, MenuItem};
 use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager, State};
 use url::Url;
@@ -55,7 +55,7 @@ use crate::browser::{fetch_public_html_summary, redact_url_for_storage, scan_chr
 use crate::browser_watcher::{BrowserHeartbeat, BrowserWatcherEngine, is_browser_application};
 use crate::browser_watcher_server::{BROWSER_WATCHER_ENDPOINT, run_browser_watcher_server};
 use crate::db::{
-    ActivitySampleWrite, ActivitySegmentRecord, DailyGoalRecord, Database,
+    ActivitySampleWrite, ActivitySegmentRecord, DailyGoalRecord, Database, FocusSessionRecord,
     MonitoringContinuityCheckpoint,
 };
 use crate::domain::{ActivityCategory, ActivityScope, TrendPayload, VideoPurpose};
@@ -114,6 +114,11 @@ pub const ANALYSIS_CHANGED_EVENT: &str = "analysis-changed";
 pub const ACTIVITY_CHANGED_EVENT: &str = "activity-changed";
 pub const COLLECTION_HEALTH_CHANGED_EVENT: &str = "collection-health-changed";
 pub const OPEN_SETTINGS_EVENT: &str = "open-settings";
+pub const FOCUS_TIMER_CHANGED_EVENT: &str = "focus-timer-changed";
+const ORBIT_TRAY_ID: &str = "orbit-main-tray";
+const FOCUS_START_MENU_ID: &str = "focus-start";
+const FOCUS_PAUSE_MENU_ID: &str = "focus-pause";
+const FOCUS_END_MENU_ID: &str = "focus-end";
 const AI_CONNECTION_HEALTH_INTERVAL: Duration = Duration::from_secs(10);
 const API_HEALTH_TIMEOUT: Duration = Duration::from_secs(8);
 const CODEX_HEALTH_TIMEOUT_MS: u64 = 5_000;
@@ -122,8 +127,96 @@ const AI_INFERENCE_VERIFICATION_TTL_MS: i64 = 30 * 60 * 1_000;
 static APP_IDENTITY_CACHE: OnceLock<Mutex<HashMap<String, CachedExecutableIdentity>>> =
     OnceLock::new();
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FocusTimerStatus {
+    session_id: String,
+    goal_date: String,
+    goal_text: String,
+    planned_minutes: u32,
+    started_at_ms: i64,
+    ends_at_ms: i64,
+    remaining_seconds: i64,
+    expired: bool,
+    paused: bool,
+    task_id: Option<String>,
+}
+
+#[derive(Clone)]
+struct FocusTrayMenuItems {
+    start: MenuItem<tauri::Wry>,
+    pause: MenuItem<tauri::Wry>,
+    end: MenuItem<tauri::Wry>,
+}
+
+fn focus_timer_status(session: FocusSessionRecord, observed_at_ms: i64) -> FocusTimerStatus {
+    let scheduled_end_ms = session
+        .started_at_ms
+        .saturating_add(i64::from(session.planned_minutes).saturating_mul(60_000))
+        .saturating_add(session.paused_total_ms.max(0));
+    let comparison_ms = session.paused_at_ms.unwrap_or(observed_at_ms);
+    let remaining_ms = scheduled_end_ms.saturating_sub(comparison_ms);
+    FocusTimerStatus {
+        session_id: session.id,
+        goal_date: session.goal_date,
+        goal_text: session.goal_text,
+        planned_minutes: session.planned_minutes,
+        started_at_ms: session.started_at_ms,
+        ends_at_ms: scheduled_end_ms,
+        remaining_seconds: if remaining_ms > 0 {
+            remaining_ms.saturating_add(999) / 1_000
+        } else {
+            0
+        },
+        expired: remaining_ms <= 0,
+        paused: session.paused_at_ms.is_some(),
+        task_id: session.task_id,
+    }
+}
+
+fn format_focus_countdown(remaining_seconds: i64) -> String {
+    let minutes = remaining_seconds.max(0) / 60;
+    let seconds = remaining_seconds.max(0) % 60;
+    format!("{minutes:02}:{seconds:02}")
+}
+
+fn focus_tray_title(status: Option<&FocusTimerStatus>) -> String {
+    status.map_or_else(String::new, |status| {
+        let pause_marker = if status.paused { " ⏸" } else { "" };
+        format!(
+            "🍅 {}{pause_marker}",
+            format_focus_countdown(status.remaining_seconds)
+        )
+    })
+}
+
+fn focus_pause_menu_label(status: Option<&FocusTimerStatus>) -> &'static str {
+    match status {
+        Some(status) if status.paused => "继续番茄钟",
+        _ => "暂停番茄钟",
+    }
+}
+
+fn same_focus_runtime_state(
+    previous: &Option<FocusTimerStatus>,
+    current: &Option<FocusTimerStatus>,
+) -> bool {
+    match (previous, current) {
+        (None, None) => true,
+        (Some(previous), Some(current)) => {
+            previous.session_id == current.session_id
+                && previous.ends_at_ms == current.ends_at_ms
+                && previous.paused == current.paused
+                && previous.expired == current.expired
+                && previous.task_id == current.task_id
+        }
+        _ => false,
+    }
+}
+
 pub struct DesktopState {
     service: Mutex<AppService>,
+    focus_tray_menu: Mutex<Option<FocusTrayMenuItems>>,
     ai_connection_health: AiConnectionHealthServiceState,
     collection_runtime: Mutex<CollectionRuntimeState>,
     browser_watcher: BrowserWatcherServiceState,
@@ -1727,7 +1820,121 @@ fn queue_trend_research_analysis(
 }
 
 #[tauri::command]
+fn get_focus_timer_status(
+    state: State<'_, DesktopState>,
+) -> Result<Option<FocusTimerStatus>, String> {
+    state_service(&state)?
+        .database()
+        .active_focus_session()
+        .map(|session| session.map(|session| focus_timer_status(session, now_ms())))
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn update_focus_tray(app: &tauri::AppHandle, status: Option<&FocusTimerStatus>) {
+    let Some(tray) = app.tray_by_id(ORBIT_TRAY_ID) else {
+        return;
+    };
+    let title = focus_tray_title(status);
+    let tooltip = status.map_or_else(
+        || "Orbit".to_string(),
+        |status| {
+            format!(
+                "Orbit Focus · {}",
+                format_focus_countdown(status.remaining_seconds)
+            )
+        },
+    );
+    // tray-icon 0.24 treats `None` as "leave the NSStatusItem title unchanged".
+    // An explicit empty string is required to remove a finished Focus countdown.
+    let _ = tray.set_title(Some(title.as_str()));
+    let _ = tray.set_tooltip(Some(tooltip));
+}
+
+#[cfg(not(target_os = "macos"))]
+fn update_focus_tray(_app: &tauri::AppHandle, _status: Option<&FocusTimerStatus>) {}
+
+#[cfg(target_os = "macos")]
+fn send_focus_completed_notification() {
+    let _ = Command::new("osascript")
+        .args([
+            "-e",
+            "display notification \"本轮专注已经结束，起来活动一下吧。\" with title \"Orbit\" subtitle \"番茄钟结束\"",
+        ])
+        .status();
+}
+
+#[cfg(not(target_os = "macos"))]
+fn send_focus_completed_notification() {}
+
+fn update_focus_menu(app: &tauri::AppHandle, status: Option<&FocusTimerStatus>) {
+    let Some(state) = app.try_state::<DesktopState>() else {
+        return;
+    };
+    let Ok(menu) = state.focus_tray_menu.lock() else {
+        return;
+    };
+    let Some(menu) = menu.as_ref() else {
+        return;
+    };
+    let has_active_session = status.is_some();
+    let can_pause = status.is_some_and(|status| !status.expired);
+    let _ = menu.start.set_enabled(!has_active_session);
+    let _ = menu.pause.set_enabled(can_pause);
+    let _ = menu.pause.set_text(focus_pause_menu_label(status));
+    let _ = menu.end.set_enabled(has_active_session);
+}
+
+fn publish_focus_status(app: &tauri::AppHandle, status: Option<FocusTimerStatus>) {
+    update_focus_tray(app, status.as_ref());
+    update_focus_menu(app, status.as_ref());
+    let _ = app.emit(FOCUS_TIMER_CHANGED_EVENT, status);
+}
+
+fn start_focus_timer_worker(app: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        let mut last_status = None::<Option<FocusTimerStatus>>;
+        loop {
+            let observed_at_ms = now_ms();
+            let current = app.try_state::<DesktopState>().and_then(|state| {
+                let service = state.service.lock().ok()?;
+                let session = service.database().active_focus_session().ok()?;
+                let status = session.map(|session| focus_timer_status(session, observed_at_ms));
+                let completed = status.as_ref().is_some_and(|status| {
+                    status.expired
+                        && service
+                            .database()
+                            .complete_expired_focus_session(
+                                &status.session_id,
+                                status.ends_at_ms,
+                                observed_at_ms,
+                            )
+                            .unwrap_or(false)
+                });
+                Some((if completed { None } else { status }, completed))
+            });
+            if let Some((current, should_notify)) = current {
+                update_focus_tray(&app, current.as_ref());
+                if last_status
+                    .as_ref()
+                    .is_none_or(|last_status| !same_focus_runtime_state(last_status, &current))
+                {
+                    update_focus_menu(&app, current.as_ref());
+                    let _ = app.emit(FOCUS_TIMER_CHANGED_EVENT, current.clone());
+                    last_status = Some(current);
+                }
+                if should_notify {
+                    send_focus_completed_notification();
+                }
+            }
+            std::thread::sleep(Duration::from_secs(1));
+        }
+    });
+}
+
+#[tauri::command]
 fn start_focus_session(
+    app: tauri::AppHandle,
     state: State<'_, DesktopState>,
     goal_date: String,
     goal_text: String,
@@ -1736,9 +1943,10 @@ fn start_focus_session(
 ) -> Result<String, String> {
     let now = now_ms();
     let id = format!("focus-{now}");
-    state_service(&state)?
-        .database()
-        .start_focus_session_for_task(
+    let service = state_service(&state)?;
+    let database = service.database();
+    database
+        .start_focus_session_for_task_if_none(
             &id,
             &goal_date,
             &goal_text,
@@ -1747,19 +1955,37 @@ fn start_focus_session(
             task_id.as_deref(),
         )
         .map_err(|error| error.to_string())?;
-    Ok(id)
+    let active = database
+        .active_focus_session()
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "Focus session could not be started".to_string())?;
+    let active_id = active.id.clone();
+    let status = focus_timer_status(active, now);
+    drop(service);
+    publish_focus_status(&app, Some(status));
+    Ok(active_id)
 }
 
 #[tauri::command]
 fn complete_focus_session(
+    app: tauri::AppHandle,
     state: State<'_, DesktopState>,
     id: String,
     outcome: String,
 ) -> Result<bool, String> {
-    state_service(&state)?
-        .database()
-        .complete_focus_session(&id, now_ms(), &outcome)
-        .map_err(|error| error.to_string())
+    let now = now_ms();
+    let service = state_service(&state)?;
+    let database = service.database();
+    let completed = database
+        .complete_focus_session(&id, now, &outcome)
+        .map_err(|error| error.to_string())?;
+    let status = database
+        .active_focus_session()
+        .map_err(|error| error.to_string())?
+        .map(|session| focus_timer_status(session, now));
+    drop(service);
+    publish_focus_status(&app, status);
+    Ok(completed)
 }
 
 #[tauri::command]
@@ -3085,6 +3311,80 @@ fn show_main_dashboard(app: &tauri::AppHandle) {
     }
 }
 
+fn start_focus_from_tray(app: &tauri::AppHandle) {
+    let now = now_ms();
+    let mut observed_status = None;
+    if let Some(state) = app.try_state::<DesktopState>()
+        && let Ok(service) = state.service.lock()
+    {
+        let database = service.database();
+        let goal_date = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let goal_text = database
+            .get_daily_goal(&goal_date)
+            .map(|goal| goal.goals)
+            .ok()
+            .filter(|goal| !goal.trim().is_empty())
+            .unwrap_or_else(|| "菜单栏番茄钟".to_string());
+        let id = format!("focus-menu-{now}");
+        let _ = database
+            .start_focus_session_for_task_if_none(&id, &goal_date, &goal_text, 25, now, None);
+        observed_status = database
+            .active_focus_session()
+            .ok()
+            .map(|session| session.map(|session| focus_timer_status(session, now)));
+    }
+    if let Some(status) = observed_status {
+        publish_focus_status(app, status);
+    }
+}
+
+fn toggle_focus_pause_from_tray(app: &tauri::AppHandle) {
+    let now = now_ms();
+    let mut observed_status = None;
+    if let Some(state) = app.try_state::<DesktopState>()
+        && let Ok(service) = state.service.lock()
+    {
+        let database = service.database();
+        if let Ok(Some(session)) = database.active_focus_session() {
+            let status = focus_timer_status(session.clone(), now);
+            if !status.expired {
+                if status.paused {
+                    let _ = database.resume_focus_session(&session.id, now);
+                } else {
+                    let _ = database.pause_focus_session(&session.id, now);
+                }
+            }
+        }
+        observed_status = database
+            .active_focus_session()
+            .ok()
+            .map(|session| session.map(|session| focus_timer_status(session, now)));
+    }
+    if let Some(status) = observed_status {
+        publish_focus_status(app, status);
+    }
+}
+
+fn end_focus_from_tray(app: &tauri::AppHandle) {
+    let now = now_ms();
+    let mut observed_status = None;
+    if let Some(state) = app.try_state::<DesktopState>()
+        && let Ok(service) = state.service.lock()
+    {
+        let database = service.database();
+        if let Ok(Some(session)) = database.active_focus_session() {
+            let _ = database.complete_focus_session(&session.id, now, "");
+        }
+        observed_status = database
+            .active_focus_session()
+            .ok()
+            .map(|session| session.map(|session| focus_timer_status(session, now)));
+    }
+    if let Some(status) = observed_status {
+        publish_focus_status(app, status);
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn install_macos_app_menu(app: &mut tauri::App) -> tauri::Result<()> {
     let menu = Menu::default(app.handle())?;
@@ -3125,6 +3425,7 @@ pub fn run() {
             }
             app.manage(DesktopState {
                 service: Mutex::new(service),
+                focus_tray_menu: Mutex::new(None),
                 ai_connection_health: AiConnectionHealthServiceState::new(
                     AiConnectionHealth::initial(),
                 ),
@@ -3137,18 +3438,51 @@ pub fn run() {
             start_ai_worker(app.handle().clone());
             start_ai_connection_health_worker(app.handle().clone());
 
-            let menu = MenuBuilder::new(app)
-                .text("show", "打开表盘")
+            #[cfg(target_os = "macos")]
+            let focus_menu_items = Some(FocusTrayMenuItems {
+                start: MenuItem::with_id(
+                    app,
+                    FOCUS_START_MENU_ID,
+                    "开始番茄钟（25 分钟）",
+                    true,
+                    None::<&str>,
+                )?,
+                pause: MenuItem::with_id(
+                    app,
+                    FOCUS_PAUSE_MENU_ID,
+                    "暂停番茄钟",
+                    false,
+                    None::<&str>,
+                )?,
+                end: MenuItem::with_id(app, FOCUS_END_MENU_ID, "结束番茄钟", false, None::<&str>)?,
+            });
+            #[cfg(not(target_os = "macos"))]
+            let focus_menu_items: Option<FocusTrayMenuItems> = None;
+            let menu_builder = MenuBuilder::new(app).text("show", "打开表盘");
+            #[cfg(target_os = "macos")]
+            let menu_builder = {
+                let items = focus_menu_items.as_ref().unwrap();
+                menu_builder
+                    .item(&items.start)
+                    .item(&items.pause)
+                    .item(&items.end)
+            };
+            let menu = menu_builder
                 .text("pause", "暂停/恢复监测")
                 .separator()
                 .quit()
                 .build()?;
-            let mut tray = TrayIconBuilder::new().menu(&menu).tooltip("Orbit");
+            let mut tray = TrayIconBuilder::with_id(ORBIT_TRAY_ID)
+                .menu(&menu)
+                .tooltip("Orbit");
             if let Some(icon) = app.default_window_icon() {
                 tray = tray.icon(icon.clone());
             }
             tray.on_menu_event(|app, event| match event.id().as_ref() {
                 "show" => show_main_dashboard(app),
+                FOCUS_START_MENU_ID => start_focus_from_tray(app),
+                FOCUS_PAUSE_MENU_ID => toggle_focus_pause_from_tray(app),
+                FOCUS_END_MENU_ID => end_focus_from_tray(app),
                 "pause" => {
                     if let Some(state) = app.try_state::<DesktopState>() {
                         if let Ok(service) = state.service.lock() {
@@ -3171,6 +3505,12 @@ pub fn run() {
                 }
             })
             .build(app)?;
+            if let Some(state) = app.try_state::<DesktopState>()
+                && let Ok(mut stored_menu) = state.focus_tray_menu.lock()
+            {
+                *stored_menu = focus_menu_items;
+            }
+            start_focus_timer_worker(app.handle().clone());
 
             if let Some(window) = app.get_webview_window("main") {
                 let hidden_window = window.clone();
@@ -3213,6 +3553,7 @@ pub fn run() {
             queue_trend_research_analysis,
             start_focus_session,
             complete_focus_session,
+            get_focus_timer_status,
             get_browser_sources,
             get_collection_health,
             scan_browsers,
@@ -5424,7 +5765,11 @@ fn platform_storage_root() -> PathBuf {
 
 #[cfg(test)]
 mod tray_interaction_tests {
-    use super::is_dashboard_open_gesture;
+    use super::{
+        focus_pause_menu_label, focus_timer_status, focus_tray_title, format_focus_countdown,
+        is_dashboard_open_gesture, same_focus_runtime_state,
+    };
+    use crate::db::FocusSessionRecord;
     use tauri::tray::MouseButton;
 
     #[test]
@@ -5433,6 +5778,57 @@ mod tray_interaction_tests {
         assert!(!is_dashboard_open_gesture(false, MouseButton::Left));
         assert!(!is_dashboard_open_gesture(true, MouseButton::Right));
         assert!(!is_dashboard_open_gesture(true, MouseButton::Middle));
+    }
+
+    #[test]
+    fn focus_countdown_uses_the_persisted_start_and_clamps_at_zero() {
+        let session = FocusSessionRecord {
+            id: "focus-1".into(),
+            goal_date: "2026-08-13".into(),
+            goal_text: "Ship timer".into(),
+            planned_minutes: 25,
+            started_at_ms: 1_000,
+            ended_at_ms: None,
+            outcome: String::new(),
+            task_id: Some("task-1".into()),
+            paused_at_ms: None,
+            paused_total_ms: 0,
+            notified_at_ms: None,
+        };
+
+        let running = focus_timer_status(session.clone(), 1_000);
+        assert_eq!(running.ends_at_ms, 1_501_000);
+        assert_eq!(running.remaining_seconds, 1_500);
+        assert_eq!(format_focus_countdown(running.remaining_seconds), "25:00");
+        assert!(!running.expired);
+        assert!(!running.paused);
+        assert_eq!(focus_pause_menu_label(Some(&running)), "暂停番茄钟");
+        assert_eq!(focus_tray_title(Some(&running)), "🍅 25:00");
+        let one_second_later = focus_timer_status(session.clone(), 2_000);
+        assert!(same_focus_runtime_state(
+            &Some(running.clone()),
+            &Some(one_second_later)
+        ));
+
+        let mut paused_session = session.clone();
+        paused_session.paused_at_ms = Some(61_000);
+        let paused = focus_timer_status(paused_session, 121_000);
+        assert_eq!(paused.remaining_seconds, 1_440);
+        assert!(paused.paused);
+        assert!(!same_focus_runtime_state(
+            &Some(running),
+            &Some(paused.clone())
+        ));
+        assert_eq!(focus_pause_menu_label(Some(&paused)), "继续番茄钟");
+        assert_eq!(focus_tray_title(Some(&paused)), "🍅 24:00 ⏸");
+
+        let expired = focus_timer_status(session, 1_501_001);
+        assert_eq!(expired.remaining_seconds, 0);
+        assert_eq!(format_focus_countdown(expired.remaining_seconds), "00:00");
+        assert!(expired.expired);
+        assert_eq!(focus_pause_menu_label(Some(&expired)), "暂停番茄钟");
+        assert_eq!(focus_pause_menu_label(None), "暂停番茄钟");
+        assert_eq!(focus_tray_title(None), "");
     }
 }
 

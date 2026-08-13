@@ -8,7 +8,6 @@ import {
   CircleX,
   ClipboardCheck,
   FileText,
-  Focus,
   ListChecks,
   Network,
   RefreshCw,
@@ -35,7 +34,7 @@ import {
 import type { TimelineFilter } from "./lib/timeline-filter";
 import { appIdentityKey, fallbackAppIdentity, type AppIdentity } from "./lib/app-identity";
 import { TodayAnalysisPanels } from "./components/today/TodayAnalysisPanels";
-import { CompactFocusPopover } from "./components/today/CompactFocusPopover";
+import { CompactFocusControl } from "./components/today/CompactFocusControl";
 import { DailyGoalPanel } from "./components/today/DailyGoalPanel";
 import { DailyMarkdownExportButton } from "./components/today/DailyMarkdownExportButton";
 import { AiAnalysisPanel } from "./components/today/AiAnalysisPanel";
@@ -67,6 +66,7 @@ import {
   getAppSettings,
   getCollectionHealth,
   getCodexHealth,
+  getFocusTimerStatus,
   importLegacyActivity,
   isDesktopRuntime,
   listAiProviders,
@@ -78,6 +78,7 @@ import {
   listenCollectionHealthChanged,
   listenOpenSettings,
   listenDailyAnalysisChanged,
+  listenFocusTimerChanged,
   listenWorkflowChanged,
   loadDashboardSnapshot,
   loadDailyAnalysis,
@@ -102,6 +103,7 @@ import {
   type CollectionChannelHealth,
   type CollectionHealth,
   type DailyGoalRecord,
+  type FocusTimerStatus,
   type ScopedDailyAnalysisResult,
   type UiFont,
   type UiTheme,
@@ -469,8 +471,10 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
   const [systemFonts, setSystemFonts] = useState<string[]>(["Ubuntu"]);
   const [focusMinutes, setFocusMinutes] = useState(45);
   const [focusRunning, setFocusRunning] = useState(false);
+  const [focusPaused, setFocusPaused] = useState(false);
   const [focusSessionId, setFocusSessionId] = useState<string | null>(null);
-  const [focusOpen, setFocusOpen] = useState(false);
+  const [focusEndsAtMs, setFocusEndsAtMs] = useState<number | null>(null);
+  const [focusPausedRemainingSeconds, setFocusPausedRemainingSeconds] = useState<number | null>(null);
   const [dailyGoal, setDailyGoal] = useState<DailyGoalRecord>(() => ({
     date: selectedDate,
     goals: "继续完善桌面版任务监测系统",
@@ -618,6 +622,33 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
     const updateHeaderLayout = () => setHeaderLayout(resolveHeaderLayout(window.innerWidth));
     window.addEventListener("resize", updateHeaderLayout);
     return () => window.removeEventListener("resize", updateHeaderLayout);
+  }, []);
+
+  useEffect(() => {
+    if (!isDesktopRuntime()) return;
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    const applyStatus = (status: FocusTimerStatus | null) => {
+      if (!active) return;
+      setFocusRunning(status !== null);
+      setFocusPaused(status?.paused ?? false);
+      setFocusSessionId(status?.sessionId ?? null);
+      setFocusEndsAtMs(status?.endsAtMs ?? null);
+      setFocusPausedRemainingSeconds(status?.paused ? status.remainingSeconds : null);
+      if (status) {
+        setFocusMinutes(status.plannedMinutes);
+        setFocusTaskId(status.taskId ?? "");
+      }
+    };
+    void getFocusTimerStatus().then(applyStatus).catch(() => undefined);
+    void listenFocusTimerChanged(applyStatus).then((stopListening) => {
+      if (active) unlisten = stopListening;
+      else stopListening();
+    }).catch(() => undefined);
+    return () => {
+      active = false;
+      unlisten?.();
+    };
   }, []);
 
   useEffect(() => {
@@ -1146,19 +1177,43 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
 
   const toggleFocus = async () => {
     if (!isDesktopRuntime()) {
-      setFocusRunning((value) => !value);
+      if (!focusRunning) {
+        setFocusRunning(true);
+        setFocusPaused(false);
+        setFocusSessionId("preview-focus");
+        setFocusEndsAtMs(Date.now() + focusMinutes * 60_000);
+      } else {
+        setFocusRunning(false);
+        setFocusPaused(false);
+        setFocusSessionId(null);
+        setFocusEndsAtMs(null);
+      }
       return;
     }
     const today = new Date().toLocaleDateString("sv-SE");
     if (!focusRunning && selectedDate !== today) return;
     if (!focusRunning) {
       const id = await beginFocus(selectedDate, dailyGoal.goals, focusMinutes, focusTaskId || null);
-      setFocusSessionId(id);
+      const current = await getFocusTimerStatus().catch(() => null);
+      setFocusSessionId(current?.sessionId ?? id);
       setFocusRunning(true);
+      setFocusPaused(current?.paused ?? false);
+      setFocusEndsAtMs(current?.endsAtMs ?? Date.now() + focusMinutes * 60_000);
+      setFocusPausedRemainingSeconds(current?.paused ? current.remainingSeconds : null);
+      if (current) {
+        setFocusMinutes(current.plannedMinutes);
+        setFocusTaskId(current.taskId ?? "");
+      }
     } else if (focusSessionId) {
       const completed = await finishFocus(focusSessionId, dailyGoal.actualOutput);
-      setFocusRunning(false);
-      setFocusSessionId(null);
+      const current = completed
+        ? null
+        : await getFocusTimerStatus().catch(() => null);
+      setFocusRunning(current !== null);
+      setFocusPaused(current?.paused ?? false);
+      setFocusSessionId(current?.sessionId ?? null);
+      setFocusEndsAtMs(current?.endsAtMs ?? null);
+      setFocusPausedRemainingSeconds(current?.paused ? current.remainingSeconds : null);
       if (completed && focusTaskId) {
         setWorkflowTaskId(focusTaskId);
         setWorkflowRefreshKey((value) => value + 1);
@@ -1484,10 +1539,7 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
             <span className="ai-status-copy">{aiStatus.label}</span>
           </button>
           <input type="date" aria-label="选择日期" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} />
-          <div className="focus-popover-anchor">
-            <button className="icon-button" aria-label="打开专注工具" aria-expanded={focusOpen} onClick={() => setFocusOpen((value) => !value)}><Focus size={18} /></button>
-            {focusOpen && <CompactFocusPopover goal={dailyGoal.goals} minutes={focusMinutes} running={focusRunning} taskId={focusTaskId} tasks={dailyLedger?.tasks ?? []} canStart={selectedDate === new Date().toLocaleDateString("sv-SE")} onTaskChange={setFocusTaskId} onMinutesChange={setFocusMinutes} onToggle={() => void toggleFocus()} />}
-          </div>
+          <CompactFocusControl goal={dailyGoal.goals} minutes={focusMinutes} running={focusRunning} paused={focusPaused} endsAtMs={focusEndsAtMs} pausedRemainingSeconds={focusPausedRemainingSeconds} taskId={focusTaskId} tasks={dailyLedger?.tasks ?? []} canStart={selectedDate === new Date().toLocaleDateString("sv-SE")} onTaskChange={setFocusTaskId} onMinutesChange={setFocusMinutes} onToggle={() => void toggleFocus()} />
           {tab === "today" && <div className="today-assistant-anchor">
             <button
               type="button"

@@ -66,6 +66,17 @@ owner exits without releasing the lease, another instance can take over after
 the 20-second expiry. This storage-scoped rule is shared with Windows; see
 `docs/DATA_INTEGRITY.md` for the lease and historical-overlap policy.
 
+While a Focus session is running, the menu-bar tray item shows `🍅 mm:ss` next
+to the Orbit icon. The countdown is derived from the persisted session start
+and planned duration, continues while the dashboard window is hidden, and is
+restored after reopening Orbit. The tray menu exposes three state-aware actions:
+start a 25-minute session, pause or continue the active session, and end it
+immediately. A paused timer shows `⏸`, remains frozen across restarts, and emits
+one macOS notification when it eventually reaches zero. Reaching zero also
+closes the Focus session immediately without creating an artificial task
+outcome. The dashboard header and Focus popover use one shared local countdown,
+while the Rust worker keeps the menu-bar title current when the window is hidden.
+
 ## Storage
 
 macOS uses the application support directory resolved by the `directories`
