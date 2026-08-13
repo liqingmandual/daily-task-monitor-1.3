@@ -9,6 +9,7 @@
 - `src-tauri/src/classifier.rs`：本地规则与行为分类。
 - `src-tauri/src/ai.rs`：提供商与离线任务模型。
 - `src-tauri/src/db.rs`：SQLite migration 与持久化。
+- `src-tauri/src/segment_overlap.rs`：跨平台权威时间线与重叠片段归一化。
 - `src-tauri/src/desktop.rs`：Tauri 命令、托盘、后台 worker 与凭据库边界。
 
 ## 分类优先级
@@ -16,6 +17,18 @@
 手动规则 > 空闲 > 高确定性应用/域名 > 媒体与视频 > 行为模型 > AI > 待分类。
 
 正式原子分类为：空闲、搜索/调研、视频信息输入、文字信息输入、游戏、社交软件、创作开发、文件整理。总活跃时长是汇总指标。
+
+## 采集权威与数据完整性
+
+同一 SQLite 数据库允许多个桌面界面实例读取，但只允许持有
+`collector_lease` 的实例执行采样。租约跟随数据库而不是操作系统进程锁，
+因此 Windows 和 macOS 使用同一套单采集器约束；失去续租后，其他实例可在
+租约过期时接管。
+
+原始活动记录不会因为历史重叠而被删除。Today 与趋势统计会先生成
+确定性的权威时间线：Active 优先于 Idle，同类冲突按起止时间和 ID 决胜，
+没有记录的间隔保持为空。完整口径、日期切换规则和回归约束见
+`docs/DATA_INTEGRITY.md`。
 
 ## 离线与补算
 

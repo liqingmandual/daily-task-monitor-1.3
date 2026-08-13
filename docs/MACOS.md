@@ -60,8 +60,11 @@ If you do not want to install pnpm globally, use `npx --yes pnpm@10` in place
 of `pnpm`, for example `npx --yes pnpm@10 install --frozen-lockfile`.
 
 Concurrent application instances are allowed for deliberate local multi-agent
-development. Run ordinary acceptance checks with one collector per database;
-do not treat concurrent collectors as one authoritative capture session.
+development. A SQLite lease now keeps exactly one collector authoritative per
+database while the other instances remain available as read-only UIs. If the
+owner exits without releasing the lease, another instance can take over after
+the 20-second expiry. This storage-scoped rule is shared with Windows; see
+`docs/DATA_INTEGRITY.md` for the lease and historical-overlap policy.
 
 ## Storage
 

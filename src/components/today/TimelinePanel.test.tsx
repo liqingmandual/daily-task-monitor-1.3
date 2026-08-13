@@ -4,7 +4,7 @@ import App from "../../App";
 import appSource from "../../App.tsx?raw";
 import { appIdentityKey, type AppIdentity } from "../../lib/app-identity";
 import type { Segment } from "../../lib/metrics";
-import { anchoredTimelineScrollLeft, buildTimelineClusters, TimelinePanel, scrollIntoViewWithHeaderOffset } from "./TimelinePanel";
+import { anchoredTimelineScrollLeft, buildTimelineClusters, IDLE_TIMELINE_COLOR, TimelinePanel, scrollIntoViewWithHeaderOffset } from "./TimelinePanel";
 
 const segments: Segment[] = [
   {
@@ -83,6 +83,15 @@ describe("TimelinePanel", () => {
     expect(summaries[1]).toMatchObject({ startMs: 10 * hour + 5 * minute, endMs: 10 * hour + 10 * minute });
     expect(summaries[1].apps.map((item) => item.app)).toEqual(["Code"]);
     expect(summaries.every((item) => item.apps.length === 1)).toBe(true);
+  });
+
+  it("keeps idle bands neutral instead of consuming an application palette color", () => {
+    const clusters = buildTimelineClusters(segments);
+    const idleBand = clusters.flatMap((cluster) => cluster.apps).find((app) => app.app === "Idle");
+    const researchBand = clusters.flatMap((cluster) => cluster.apps).find((app) => app.app === "Chrome");
+
+    expect(idleBand?.color).toBe(IDLE_TIMELINE_COLOR);
+    expect(researchBand?.color).not.toBe(IDLE_TIMELINE_COLOR);
   });
 
   it("renders the resolved app identity and shared native icon", () => {

@@ -286,6 +286,7 @@ function CollectionHealthPanel({ health }: { health: CollectionHealth | null }) 
 }
 
 const DASHBOARD_SYNC_INTERVAL_MS = 60_000;
+const EMPTY_ACTIVITY_COMPOSITIONS = buildFallbackActivityCompositions([]);
 
 function MetricCard({ label, value, note, accent, onActivate }: { label: string; value: string; note: string; accent: string; onActivate?: () => void }) {
   const content = <>
@@ -409,8 +410,13 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
   const [todayAssistantOpen, setTodayAssistantOpen] = useState(false);
   const [graphOpen, setGraphOpen] = useState(false);
   const [monitoring, setMonitoring] = useState(true);
+  const [selectedDate, setSelectedDate] = useState(() => new Date().toLocaleDateString("sv-SE"));
   const [segments, setSegments] = useState(() => initialSegments ?? (isDesktopRuntime() ? [] : sampleSegments));
-  const [authoritativeActivityCompositions, setAuthoritativeActivityCompositions] = useState<ActivityCompositions | null>(null);
+  const [segmentsDate, setSegmentsDate] = useState(selectedDate);
+  const [authoritativeActivityCompositions, setAuthoritativeActivityCompositions] = useState<{
+    date: string;
+    value: ActivityCompositions;
+  } | null>(null);
   const [todayActivityScope, setTodayActivityScope] = useState<ActivityScope>(() => (
     typeof window === "undefined"
       ? "all"
@@ -422,7 +428,6 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
       return [appIdentityKey(segment.app, path), fallbackAppIdentity(segment.app, path)];
     }),
   ));
-  const [selectedDate, setSelectedDate] = useState(() => new Date().toLocaleDateString("sv-SE"));
   const [desktopMessage, setDesktopMessage] = useState("本地预览数据");
   const [providers, setProviders] = useState<AiProvider[]>([]);
   const [browserSources, setBrowserSources] = useState<BrowserSource[]>([]);
@@ -499,21 +504,29 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
   const aiReviewMarkersRequestRef = useRef(0);
   const dashboardRequestRef = useRef(0);
   const dailyAutoQueueRef = useRef(new Map<string, DailyAnalysisQueueCheckpoint>());
-  const metrics = useMemo(() => buildDashboardMetrics(segments), [segments]);
+  const dashboardSegments = segmentsDate === selectedDate ? segments : [];
+  const metrics = useMemo(() => buildDashboardMetrics(dashboardSegments), [dashboardSegments]);
   const activityCompositions = useMemo(
-    () => authoritativeActivityCompositions ?? buildFallbackActivityCompositions(segments),
-    [authoritativeActivityCompositions, segments],
+    () => {
+      if (!isDesktopRuntime()) return buildFallbackActivityCompositions(dashboardSegments);
+      return authoritativeActivityCompositions?.date === selectedDate
+        ? authoritativeActivityCompositions.value
+        : dashboardSegments.length
+          ? buildFallbackActivityCompositions(dashboardSegments)
+          : EMPTY_ACTIVITY_COMPOSITIONS;
+    },
+    [authoritativeActivityCompositions, dashboardSegments, selectedDate],
   );
   const aiStatus = aiHealthPresentation(aiConnectionHealth, isDesktopRuntime());
-  const totalSwitches = Math.max(0, segments.length - 1);
+  const totalSwitches = Math.max(0, dashboardSegments.length - 1);
   const switchesPerActiveHour = metrics.activeSeconds > 0
     ? totalSwitches * 3_600 / metrics.activeSeconds
     : null;
-  const longestFocusSegment = segments
+  const longestFocusSegment = dashboardSegments
     .filter((item) => item.category !== "idle")
     .reduce<Segment | null>((longest, item) => !longest || item.endMs - item.startMs > longest.endMs - longest.startMs ? item : longest, null);
   const longestFocus = longestFocusSegment ? (longestFocusSegment.endMs - longestFocusSegment.startMs) / 1_000 : 0;
-  const pendingSegments = segments.filter((item) => item.needsReview || item.category === "pending");
+  const pendingSegments = dashboardSegments.filter((item) => item.needsReview || item.category === "pending");
   const pendingSeconds = activityCompositions.all.items.find((item) => item.key === "pending")?.seconds ?? 0;
   const classificationCoverage = Math.round(
     ((metrics.monitoredSeconds - pendingSeconds) / Math.max(metrics.monitoredSeconds, 1)) * 100,
@@ -859,9 +872,11 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
       const { startMs, endMs } = dayBounds(selectedDate);
       const nextSegments = toUiSegments(dashboard.timeline, startMs, endMs);
       setSegments(nextSegments);
-      setAuthoritativeActivityCompositions(
-        dashboard.activityComposition ?? buildFallbackActivityCompositions(nextSegments),
-      );
+      setSegmentsDate(selectedDate);
+      setAuthoritativeActivityCompositions({
+        date: selectedDate,
+        value: dashboard.activityComposition ?? buildFallbackActivityCompositions(nextSegments),
+      });
       setDailyWorkLedgerRollup(dashboard.workLedger);
       try {
         const nextAppIdentities = await resolveAppIdentities(nextSegments);
@@ -911,7 +926,7 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
 
   useEffect(() => {
     if (!isDesktopRuntime()) return;
-    const today = new Date().toLocaleDateString("sv-SE");
+    const observedDate = new Date().toLocaleDateString("sv-SE");
     const { startMs, endMs } = dayBounds(selectedDate);
     let active = true;
     let unlisten: (() => void) | undefined;
@@ -921,7 +936,13 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
     let lastActivityRefreshAt = Date.now();
 
     const refreshCurrentDay = () => {
-      if (!active || selectedDate !== today || document.visibilityState === "hidden") return;
+      if (!active) return;
+      const currentDate = new Date().toLocaleDateString("sv-SE");
+      if (currentDate !== observedDate) {
+        if (selectedDate === observedDate) setSelectedDate(currentDate);
+        return;
+      }
+      if (selectedDate !== currentDate || document.visibilityState === "hidden") return;
       if (emptyRetryTimer) {
         clearTimeout(emptyRetryTimer);
         emptyRetryTimer = undefined;
@@ -939,7 +960,7 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
     };
 
     void refreshDashboard().then((segmentCount) => {
-      if (!active || segmentCount !== 0 || selectedDate !== today) return;
+      if (!active || segmentCount !== 0 || selectedDate !== observedDate) return;
       emptyRetryTimer = setTimeout(() => {
         emptyRetryTimer = undefined;
         if (active) void refreshDashboard();
@@ -965,7 +986,7 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
       else stopListening();
     }).catch(() => undefined);
 
-    if (selectedDate === today) {
+    if (selectedDate === observedDate) {
       dashboardSyncTimer = setInterval(refreshCurrentDay, DASHBOARD_SYNC_INTERVAL_MS);
       window.addEventListener("focus", refreshCurrentDay);
       document.addEventListener("visibilitychange", refreshWhenVisible);
@@ -1521,7 +1542,7 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
             />
             <TimelinePanel
               ref={setTimeline}
-              segments={segments}
+              segments={dashboardSegments}
               identities={appIdentities}
               filter={drilldown}
               onFilterChange={setDrilldown}

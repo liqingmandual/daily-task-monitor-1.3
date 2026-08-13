@@ -1,4 +1,5 @@
 import { isLearningActivity } from "./activity-composition";
+import { canonicalizeOverlappingSegments } from "./segment-overlap";
 
 export type ActivityCategory =
   | "idle"
@@ -169,7 +170,7 @@ export function buildDashboardMetrics(segments: Segment[], dayStartMs = 0): Dash
   let idleSeconds = 0;
   let learningSeconds = 0;
 
-  for (const segment of segments) {
+  for (const segment of canonicalizeOverlappingSegments(segments)) {
     const durationSeconds = Math.max(0, Math.round((segment.endMs - segment.startMs) / 1_000));
     if (!durationSeconds) continue;
     monitoredSeconds += durationSeconds;

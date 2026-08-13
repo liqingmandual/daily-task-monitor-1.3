@@ -142,6 +142,33 @@ fn one_day_trend_boundaries() -> (Vec<i64>, Vec<i64>) {
     (vec![0, DAY_MS], vec![-DAY_MS, 0])
 }
 
+#[test]
+fn legacy_trends_count_overlapping_collectors_once() {
+    const HOUR_MS: i64 = 3_600_000;
+    let database = Database::open_in_memory().unwrap();
+    database
+        .insert_segment(&segment("idle-a", ActivityCategory::Idle, 0, 4 * HOUR_MS))
+        .unwrap();
+    database
+        .insert_segment(&segment("idle-b", ActivityCategory::Idle, 0, 4 * HOUR_MS))
+        .unwrap();
+    database
+        .insert_segment(&segment(
+            "active",
+            ActivityCategory::Research,
+            HOUR_MS,
+            2 * HOUR_MS,
+        ))
+        .unwrap();
+
+    let payload = one_day_trend_payload(&AppService::new(database));
+
+    assert_eq!(payload.summary.monitored_seconds, 4 * 3_600);
+    assert_eq!(payload.summary.active_seconds, 3_600);
+    assert_eq!(payload.summary.idle_seconds, 3 * 3_600);
+    assert_eq!(payload.days[0].monitored_seconds, 4 * 3_600);
+}
+
 fn execution_snapshot(provider_id: &str, model: &str, created_at_ms: i64) -> AiExecutionSnapshot {
     AiExecutionSnapshot {
         execution_mode: AiExecutionMode::ApiKey,
@@ -667,6 +694,51 @@ fn dashboard_snapshot_contains_totals_and_timeline() {
     assert_eq!(snapshot.timeline.len(), 2);
     assert_eq!(snapshot.activity_composition.all.total_seconds, 90);
     assert_eq!(snapshot.activity_composition.meaningful.total_seconds, 60);
+}
+
+#[test]
+fn dashboard_composition_counts_overlapping_collectors_only_once() {
+    let database = Database::open_in_memory().unwrap();
+    database
+        .insert_segment(&segment("idle-a", ActivityCategory::Idle, 0, 14_400_000))
+        .unwrap();
+    database
+        .insert_segment(&segment("idle-b", ActivityCategory::Idle, 0, 14_400_000))
+        .unwrap();
+    database
+        .insert_segment(&segment(
+            "research",
+            ActivityCategory::Research,
+            3_600_000,
+            7_200_000,
+        ))
+        .unwrap();
+
+    let service = AppService::new(database);
+    let snapshot = service.get_dashboard(0, 14_400_000).unwrap();
+
+    assert_eq!(snapshot.timeline.len(), 3);
+    assert_eq!(snapshot.activity_composition.all.total_seconds, 4 * 3_600);
+    assert_eq!(
+        snapshot.activity_composition.meaningful.total_seconds,
+        3_600
+    );
+    assert!(
+        snapshot
+            .activity_composition
+            .all
+            .items
+            .iter()
+            .any(|item| { item.category == ActivityCategory::Idle && item.seconds == 3 * 3_600 })
+    );
+    assert!(
+        snapshot
+            .activity_composition
+            .all
+            .items
+            .iter()
+            .any(|item| { item.category == ActivityCategory::Research && item.seconds == 3_600 })
+    );
 }
 
 #[test]

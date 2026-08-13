@@ -21,6 +21,7 @@ use crate::domain::{
     ActivityCategory, ActivityScope, AiClassificationReviewValue, AiWorkflowAssignmentReviewValue,
     ClassificationSource, InactivityReason, VideoPurpose,
 };
+use crate::segment_overlap::canonicalize_activity_segments;
 use crate::trend_analysis::{ResearchStatus, TrendResearchAnalysis, TrendResearchFinding};
 use crate::work_ledger::{
     AiTaskCancellation, AiWorkLedgerSuggestion, ConfirmedDailyGoalTask, DailyGoalTaskLink,
@@ -943,6 +944,12 @@ impl Database {
                 last_uptime_ms INTEGER NOT NULL DEFAULT 0,
                 updated_at_ms INTEGER NOT NULL DEFAULT 0
             );
+            CREATE TABLE IF NOT EXISTS collector_lease (
+                singleton_id INTEGER PRIMARY KEY CHECK(singleton_id=1),
+                owner_id TEXT NOT NULL,
+                expires_at_ms INTEGER NOT NULL,
+                updated_at_ms INTEGER NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS monitoring_gap_repairs (
                 gap_key TEXT PRIMARY KEY,
                 started_at_ms INTEGER NOT NULL,
@@ -1752,6 +1759,40 @@ impl Database {
             .optional()
     }
 
+    pub fn try_acquire_collector_lease(
+        &self,
+        owner_id: &str,
+        now_ms: i64,
+        ttl_ms: i64,
+    ) -> Result<bool> {
+        if owner_id.trim().is_empty() || ttl_ms <= 0 {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "collector lease requires a non-empty owner and positive ttl".into(),
+            ));
+        }
+        let expires_at_ms = now_ms.saturating_add(ttl_ms);
+        let changed = self.connection.execute(
+            "INSERT INTO collector_lease(singleton_id, owner_id, expires_at_ms, updated_at_ms)
+             VALUES(1, ?1, ?2, ?3)
+             ON CONFLICT(singleton_id) DO UPDATE SET
+                owner_id=excluded.owner_id,
+                expires_at_ms=excluded.expires_at_ms,
+                updated_at_ms=excluded.updated_at_ms
+             WHERE collector_lease.owner_id=excluded.owner_id
+                OR collector_lease.expires_at_ms <= ?3",
+            params![owner_id, expires_at_ms, now_ms],
+        )?;
+        Ok(changed > 0)
+    }
+
+    pub fn release_collector_lease(&self, owner_id: &str) -> Result<bool> {
+        let changed = self.connection.execute(
+            "DELETE FROM collector_lease WHERE singleton_id=1 AND owner_id=?1",
+            [owner_id],
+        )?;
+        Ok(changed > 0)
+    }
+
     pub fn save_monitoring_continuity_checkpoint(
         &self,
         checkpoint: &MonitoringContinuityCheckpoint,
@@ -1953,25 +1994,23 @@ impl Database {
     }
 
     pub fn dashboard_totals(&self, start_ms: i64, end_ms: i64) -> Result<DashboardTotals> {
-        let mut statement = self.connection.prepare(
-            "SELECT category, video_purpose,
-                    SUM(MAX(0, MIN(ended_at_ms, ?2) - MAX(started_at_ms, ?1))) / 1000
-             FROM activity_segments
-             WHERE ended_at_ms > ?1 AND started_at_ms < ?2
-             GROUP BY category, video_purpose",
-        )?;
-        let rows = statement.query_map(params![start_ms, end_ms], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, i64>(2)?,
-            ))
-        })?;
+        if end_ms <= start_ms {
+            return Ok(DashboardTotals::default());
+        }
+        let segments = self.list_clipped_segments(start_ms, end_ms)?;
+        let mut duration_ms = BTreeMap::<(String, String), i64>::new();
+        for segment in canonicalize_activity_segments(&segments, start_ms, end_ms) {
+            let key = (
+                category_key(segment.category).to_string(),
+                video_purpose_key(segment.video_purpose).to_string(),
+            );
+            *duration_ms.entry(key).or_default() +=
+                segment.ended_at_ms.saturating_sub(segment.started_at_ms);
+        }
 
         let mut totals = DashboardTotals::default();
-        for row in rows {
-            let (category, video_purpose, seconds) = row?;
-            let seconds = seconds.max(0);
+        for ((category, video_purpose), milliseconds) in duration_ms {
+            let seconds = milliseconds.max(0) / 1_000;
             totals.monitored_seconds += seconds;
             *totals.category_seconds.entry(category.clone()).or_default() += seconds;
             if category == "idle" {

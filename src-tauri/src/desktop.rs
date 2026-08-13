@@ -3534,6 +3534,9 @@ fn start_monitoring_worker(app: tauri::AppHandle) {
     std::thread::spawn(move || {
         const GAP_THRESHOLD_MS: i64 = 15_000;
         const HISTORY_REPAIR_LOOKBACK_MS: i64 = 30 * 24 * 60 * 60 * 1_000;
+        const COLLECTOR_LEASE_TTL_MS: i64 = 20_000;
+        let collector_owner_id = format!("collector-{}-{}", std::process::id(), now_ms());
+        let mut collector_lease_valid_until_ms = 0_i64;
         let mut collector = PlatformCollector::default();
         let mut engine = MonitorEngine::new(6 * 60 * 1_000);
         let mut was_monitoring = false;
@@ -3544,6 +3547,36 @@ fn start_monitoring_worker(app: tauri::AppHandle) {
                 .and_then(|state| state.service.lock().ok()?.get_settings().ok())
                 .unwrap_or_default();
             if settings.monitoring_enabled {
+                let lease_now_ms = now_ms();
+                let owns_collector_lease = app
+                    .try_state::<DesktopState>()
+                    .and_then(|state| {
+                        let service = state.service.lock().ok()?;
+                        match service.database().try_acquire_collector_lease(
+                            &collector_owner_id,
+                            lease_now_ms,
+                            COLLECTOR_LEASE_TTL_MS,
+                        ) {
+                            Ok(true) => {
+                                collector_lease_valid_until_ms =
+                                    lease_now_ms.saturating_add(COLLECTOR_LEASE_TTL_MS);
+                                Some(true)
+                            }
+                            Ok(false) => Some(false),
+                            Err(_) => Some(collector_lease_valid_until_ms > lease_now_ms),
+                        }
+                    })
+                    .unwrap_or(false);
+                if !owns_collector_lease {
+                    if was_monitoring {
+                        let _ = engine.take_current();
+                        engine =
+                            MonitorEngine::new(settings.idle_threshold_minutes as i64 * 60_000);
+                    }
+                    was_monitoring = false;
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    continue;
+                }
                 let idle_threshold_ms = settings.idle_threshold_minutes as i64 * 60_000;
                 engine.set_idle_threshold_ms(idle_threshold_ms);
                 let mut sample = collector.sample();
@@ -3745,6 +3778,10 @@ fn start_monitoring_worker(app: tauri::AppHandle) {
                                 }),
                             );
                         }
+                        let _ = service
+                            .database()
+                            .release_collector_lease(&collector_owner_id);
+                        collector_lease_valid_until_ms = 0;
                     }
                 }
             }
