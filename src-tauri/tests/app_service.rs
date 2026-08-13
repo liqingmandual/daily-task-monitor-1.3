@@ -1234,6 +1234,52 @@ fn daily_analysis_queue_deduplicates_the_same_evidence_hash() {
 }
 
 #[test]
+fn daily_analysis_queue_replaces_pending_evidence_for_the_same_day_and_scope() {
+    let database = Database::open_in_memory().unwrap();
+    database
+        .insert_segment(&segment(
+            "dev-initial",
+            ActivityCategory::CreationDevelopment,
+            1_000,
+            61_000,
+        ))
+        .unwrap();
+    let service = AppService::new(database);
+    let execution = execution_snapshot("openai", "gpt-frozen", 5_000);
+    let first = service
+        .queue_daily_analysis("2026-07-12", 0, 180_000, 5_000, Some(&execution))
+        .unwrap()
+        .unwrap();
+    let initial_hash = service
+        .database()
+        .get_ai_job(&first)
+        .unwrap()
+        .unwrap()
+        .execution
+        .evidence_hash;
+
+    service
+        .database()
+        .insert_segment(&segment(
+            "dev-later",
+            ActivityCategory::Research,
+            61_000,
+            121_000,
+        ))
+        .unwrap();
+    let second = service
+        .queue_daily_analysis("2026-07-12", 0, 180_000, 6_000, Some(&execution))
+        .unwrap()
+        .unwrap();
+    let updated = service.database().get_ai_job(&second).unwrap().unwrap();
+
+    assert_eq!(first, second);
+    assert_eq!(service.database().ai_job_count().unwrap(), 1);
+    assert_ne!(updated.execution.evidence_hash, initial_hash);
+    assert_eq!(updated.execution.created_at_ms, 6_000);
+}
+
+#[test]
 fn daily_analysis_scope_separates_evidence_and_pending_jobs() {
     let database = Database::open_in_memory().unwrap();
     database

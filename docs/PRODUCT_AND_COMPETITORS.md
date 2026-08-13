@@ -13,7 +13,8 @@ optional AI constrained by locally verified facts.
 
 ## Current capabilities
 
-- Five-second foreground application sampling on Windows and macOS.
+- Five-second foreground observation on Windows and macOS, with change-driven
+  raw persistence and a 60-second storage heartbeat.
 - Window title, executable identity, idle detection, and continuity repair.
 - Read-only Chromium history collection with URL credential/query redaction.
 - Authenticated loopback browser watchers that measure active-tab duration for

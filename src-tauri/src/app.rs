@@ -1283,12 +1283,7 @@ impl AppService {
         self.database
             .enqueue_ai_job_for_subject(
                 "daily_analysis",
-                &format!(
-                    "{}:{}:{}",
-                    date,
-                    activity_scope_key(activity_scope),
-                    evidence.evidence_hash
-                ),
+                &format!("{}:{}", date, activity_scope_key(activity_scope)),
                 &payload,
                 now_ms,
                 &execution,

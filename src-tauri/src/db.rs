@@ -1588,6 +1588,31 @@ impl Database {
             )?;
             transaction.commit()?;
         }
+        if version < 14 {
+            self.connection.execute_batch(
+                "
+                BEGIN IMMEDIATE;
+                DELETE FROM ai_jobs
+                WHERE status='pending'
+                  AND attempts=0
+                  AND kind IN (
+                    'classify_segment',
+                    'classify_page',
+                    'daily_analysis',
+                    'work_ledger_assignment'
+                  );
+                PRAGMA user_version = 14;
+                COMMIT;
+                ",
+            )?;
+        }
+        if version < 15 {
+            // The v14 cleanup can release several megabytes. VACUUM is best-effort because a
+            // concurrent read-only UI may briefly hold a lock; even without it SQLite will reuse
+            // the freed pages for future writes.
+            let _ = self.connection.execute_batch("VACUUM;");
+            self.connection.execute_batch("PRAGMA user_version = 15;")?;
+        }
         Ok(())
     }
 
@@ -1754,24 +1779,35 @@ impl Database {
         segments: &[ActivitySegmentRecord],
         checkpoint: &MonitoringContinuityCheckpoint,
     ) -> Result<()> {
+        self.record_monitoring_tick_with_optional_sample(Some(sample), segments, checkpoint)
+    }
+
+    pub fn record_monitoring_tick_with_optional_sample(
+        &self,
+        sample: Option<&ActivitySampleWrite>,
+        segments: &[ActivitySegmentRecord],
+        checkpoint: &MonitoringContinuityCheckpoint,
+    ) -> Result<()> {
         let transaction = self.connection.unchecked_transaction()?;
-        transaction.execute(
-            "INSERT OR IGNORE INTO activity_samples(
-                id, sampled_at_ms, app, app_path, title, idle_seconds, key_presses,
-                mouse_events, media_playing
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
-                sample.id,
-                sample.sampled_at_ms,
-                sample.app,
-                sample.app_path,
-                sample.title,
-                sample.idle_seconds.max(0),
-                sample.key_presses,
-                sample.mouse_events,
-                sample.media_playing,
-            ],
-        )?;
+        if let Some(sample) = sample {
+            transaction.execute(
+                "INSERT OR IGNORE INTO activity_samples(
+                    id, sampled_at_ms, app, app_path, title, idle_seconds, key_presses,
+                    mouse_events, media_playing
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    sample.id,
+                    sample.sampled_at_ms,
+                    sample.app,
+                    sample.app_path,
+                    sample.title,
+                    sample.idle_seconds.max(0),
+                    sample.key_presses,
+                    sample.mouse_events,
+                    sample.media_playing,
+                ],
+            )?;
+        }
         for segment in segments {
             upsert_native_segment_on(&transaction, segment)?;
         }
@@ -7093,6 +7129,58 @@ fn enqueue_ai_job_hashed_on(
                     params![id, payload_json],
                 )?;
             }
+            return Ok((id, false));
+        }
+
+        // Evidence for a stable subject can change while it is still being collected (for
+        // example, the duration of today's current segment). Replace an unattempted pending
+        // snapshot instead of appending one queue row for every observation.
+        let pending = connection
+            .query_row(
+                "SELECT id, generation FROM ai_jobs
+                 WHERE kind=?1 AND subject_key=?2
+                   AND execution_mode=?3 AND executor_id=?4 AND model=?5
+                   AND status='pending' AND attempts=0
+                 ORDER BY generation DESC, id ASC LIMIT 1",
+                params![
+                    kind,
+                    subject_key,
+                    execution.execution_mode.as_database(),
+                    execution.executor_id,
+                    execution.model,
+                ],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()?;
+        if let Some((id, generation)) = pending {
+            let snapshot_hash_input = format!(
+                "{}\n{}\n{}\n{}",
+                execution.execution_mode.as_database(),
+                execution.executor_id,
+                execution.model,
+                execution.evidence_hash
+            );
+            let content_hash = format!(
+                "{:x}",
+                Sha256::digest(
+                    format!("{kind}\n{subject_key}\n{generation}\n{snapshot_hash_input}")
+                        .as_bytes()
+                )
+            );
+            connection.execute(
+                "UPDATE ai_jobs SET
+                    content_hash=?2, payload_json=?3, next_attempt_at_ms=?4,
+                    evidence_hash=?5, execution_created_at_ms=?6
+                 WHERE id=?1 AND status='pending' AND attempts=0",
+                params![
+                    id,
+                    content_hash,
+                    payload_json,
+                    now_ms,
+                    execution.evidence_hash,
+                    execution.created_at_ms,
+                ],
+            )?;
             return Ok((id, false));
         }
     }

@@ -3752,6 +3752,115 @@ fn enqueue_segment_for_ai(
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+const ACTIVITY_SAMPLE_HEARTBEAT_MS: i64 = 60_000;
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ActivitySampleFingerprint {
+    app: String,
+    app_path: String,
+    title: String,
+    idle: bool,
+    media_playing: bool,
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[derive(Debug, Default)]
+struct ActivitySamplePersistenceState {
+    last_fingerprint: Option<ActivitySampleFingerprint>,
+    last_persisted_at_ms: Option<i64>,
+    pending_key_presses: u32,
+    pending_mouse_events: u32,
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+impl ActivitySamplePersistenceState {
+    fn observe(
+        &mut self,
+        sample: &crate::monitor::MonitorSample,
+        idle: bool,
+    ) -> Option<(u32, u32)> {
+        self.pending_key_presses = self.pending_key_presses.saturating_add(sample.key_presses);
+        self.pending_mouse_events = self
+            .pending_mouse_events
+            .saturating_add(sample.mouse_events);
+        let fingerprint = ActivitySampleFingerprint {
+            app: sample.app.clone(),
+            app_path: sample.app_path.clone(),
+            title: sample.title.clone(),
+            idle,
+            media_playing: sample.media_playing,
+        };
+        let state_changed = self.last_fingerprint.as_ref() != Some(&fingerprint);
+        let heartbeat_due = self.last_persisted_at_ms.is_none_or(|last| {
+            sample.observed_at_ms.saturating_sub(last) >= ACTIVITY_SAMPLE_HEARTBEAT_MS
+        });
+        if !state_changed && !heartbeat_due {
+            return None;
+        }
+        self.last_fingerprint = Some(fingerprint);
+        self.last_persisted_at_ms = Some(sample.observed_at_ms);
+        let aggregate = (self.pending_key_presses, self.pending_mouse_events);
+        self.pending_key_presses = 0;
+        self.pending_mouse_events = 0;
+        Some(aggregate)
+    }
+
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
+#[cfg(all(test, any(target_os = "macos", target_os = "windows")))]
+mod activity_sample_persistence_tests {
+    use super::ActivitySamplePersistenceState;
+    use crate::monitor::MonitorSample;
+
+    fn sample(observed_at_ms: i64, title: &str, key_presses: u32) -> MonitorSample {
+        MonitorSample {
+            observed_at_ms,
+            last_input_at_ms: observed_at_ms,
+            app: "Code".into(),
+            app_path: "/Applications/Code.app".into(),
+            title: title.into(),
+            domain: String::new(),
+            key_presses,
+            mouse_events: 1,
+            media_playing: false,
+        }
+    }
+
+    #[test]
+    fn unchanged_samples_are_aggregated_until_state_change_or_heartbeat() {
+        let mut state = ActivitySamplePersistenceState::default();
+
+        assert_eq!(state.observe(&sample(0, "one", 1), false), Some((1, 1)));
+        assert_eq!(state.observe(&sample(5_000, "one", 2), false), None);
+        assert_eq!(
+            state.observe(&sample(10_000, "two", 3), false),
+            Some((5, 2)),
+            "a title change flushes all input accumulated since the previous persisted sample"
+        );
+        assert_eq!(state.observe(&sample(65_000, "two", 4), false), None);
+        assert_eq!(
+            state.observe(&sample(70_000, "two", 5), false),
+            Some((9, 2)),
+            "an unchanged state is persisted at least once per minute"
+        );
+    }
+
+    #[test]
+    fn idle_transition_and_reset_force_a_sample() {
+        let mut state = ActivitySamplePersistenceState::default();
+
+        assert!(state.observe(&sample(0, "one", 0), false).is_some());
+        assert!(state.observe(&sample(5_000, "one", 0), true).is_some());
+        state.reset();
+        assert!(state.observe(&sample(10_000, "one", 0), true).is_some());
+    }
+}
+
 fn load_or_create_browser_watcher_token(
     database: &Database,
 ) -> Result<String, Box<dyn std::error::Error>> {
@@ -3874,12 +3983,14 @@ fn process_browser_heartbeat(
 fn start_monitoring_worker(app: tauri::AppHandle) {
     std::thread::spawn(move || {
         const GAP_THRESHOLD_MS: i64 = 15_000;
+        const HISTORY_REPAIR_GAP_THRESHOLD_MS: i64 = ACTIVITY_SAMPLE_HEARTBEAT_MS + 15_000;
         const HISTORY_REPAIR_LOOKBACK_MS: i64 = 30 * 24 * 60 * 60 * 1_000;
         const COLLECTOR_LEASE_TTL_MS: i64 = 20_000;
         let collector_owner_id = format!("collector-{}-{}", std::process::id(), now_ms());
         let mut collector_lease_valid_until_ms = 0_i64;
         let mut collector = PlatformCollector::default();
         let mut engine = MonitorEngine::new(6 * 60 * 1_000);
+        let mut sample_persistence = ActivitySamplePersistenceState::default();
         let mut was_monitoring = false;
         let mut historical_repair_checked = false;
         loop {
@@ -3913,6 +4024,7 @@ fn start_monitoring_worker(app: tauri::AppHandle) {
                         let _ = engine.take_current();
                         engine =
                             MonitorEngine::new(settings.idle_threshold_minutes as i64 * 60_000);
+                        sample_persistence.reset();
                     }
                     was_monitoring = false;
                     std::thread::sleep(std::time::Duration::from_secs(5));
@@ -3971,7 +4083,7 @@ fn start_monitoring_worker(app: tauri::AppHandle) {
                                     .repair_recent_monitoring_gaps(
                                         sample.observed_at_ms,
                                         HISTORY_REPAIR_LOOKBACK_MS,
-                                        GAP_THRESHOLD_MS,
+                                        HISTORY_REPAIR_GAP_THRESHOLD_MS,
                                     )
                                     .and_then(|_| {
                                         database.set_setting_json(
@@ -4028,18 +4140,23 @@ fn start_monitoring_worker(app: tauri::AppHandle) {
                             .collect::<Vec<_>>();
                         persisted_segments.extend(output.completed.iter().cloned());
                         persisted_segments.push(output.current.clone());
-                        let persisted = database.record_monitoring_tick(
-                            &ActivitySampleWrite {
+                        let sample_aggregate = sample_persistence
+                            .observe(&sample, output.current.category == ActivityCategory::Idle);
+                        let sample_write = sample_aggregate.map(|(key_presses, mouse_events)| {
+                            ActivitySampleWrite {
                                 id: sample_id,
                                 sampled_at_ms: sample.observed_at_ms,
                                 app: sample.app.clone(),
                                 app_path: sample.app_path.clone(),
                                 title: sample.title.clone(),
                                 idle_seconds,
-                                key_presses: sample.key_presses,
-                                mouse_events: sample.mouse_events,
+                                key_presses,
+                                mouse_events,
                                 media_playing: sample.media_playing,
-                            },
+                            }
+                        });
+                        let persisted = database.record_monitoring_tick_with_optional_sample(
+                            sample_write.as_ref(),
                             &persisted_segments,
                             &MonitoringContinuityCheckpoint {
                                 expected_tracking: true,
@@ -4075,23 +4192,6 @@ fn start_monitoring_worker(app: tauri::AppHandle) {
                                     );
                                 }
                             }
-                            if background_ai_gate_enabled(
-                                &settings,
-                                AiAutomationGate::Classification,
-                            ) && output.current.needs_review
-                                && !matches_app_exclusion(
-                                    &output.current.app,
-                                    &settings.excluded_apps,
-                                )
-                            {
-                                enqueue_segment_for_ai(
-                                    database,
-                                    &settings,
-                                    &providers,
-                                    &output.current,
-                                    sample.observed_at_ms,
-                                );
-                            }
                         }
                     }
                 }
@@ -4106,6 +4206,7 @@ fn start_monitoring_worker(app: tauri::AppHandle) {
                     updated_at_ms: observed_at_ms,
                 };
                 let segment = engine.take_current();
+                sample_persistence.reset();
                 if let Some(state) = app.try_state::<DesktopState>() {
                     if let Ok(service) = state.service.lock() {
                         let persisted = service
@@ -4271,8 +4372,13 @@ fn start_ai_worker(app: tauri::AppHandle) {
         };
         runtime.block_on(async move {
             loop {
-                let _ = process_one_ai_job(&app).await;
-                tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+                let processed = process_one_ai_job(&app).await.unwrap_or(false);
+                tokio::time::sleep(std::time::Duration::from_secs(if processed {
+                    1
+                } else {
+                    20
+                }))
+                .await;
             }
         });
     });
@@ -4553,9 +4659,9 @@ async fn process_one_ai_job(app: &tauri::AppHandle) -> Result<bool, String> {
 
 async fn process_one_ai_job_with_manual_override(
     app: &tauri::AppHandle,
-    manual_override: bool,
+    _manual_override: bool,
 ) -> Result<bool, String> {
-    let (job, _settings, providers) = {
+    let (job, providers) = {
         let Some(state) = app.try_state::<DesktopState>() else {
             return Ok(false);
         };
@@ -4563,10 +4669,6 @@ async fn process_one_ai_job_with_manual_override(
             .service
             .lock()
             .map_err(|_| "Application state is unavailable")?;
-        let settings = service.get_settings().map_err(|error| error.to_string())?;
-        if !settings.ai_backfill_enabled && !manual_override {
-            return Ok(false);
-        }
         let Some(job) = service
             .database()
             .claim_next_due_ai_job(now_ms())
@@ -4576,7 +4678,6 @@ async fn process_one_ai_job_with_manual_override(
         };
         (
             job,
-            settings,
             provider_templates(Some(service.database()))
                 .into_iter()
                 .map(|mut provider| {
