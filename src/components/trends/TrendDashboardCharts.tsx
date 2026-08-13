@@ -5,7 +5,7 @@ import {
   displayMetaForKey,
   type ActivityScope,
 } from "../../lib/activity-composition";
-import type { TrendBucket, TrendDay } from "../../lib/desktop";
+import type { TrendBucket, TrendGranularity } from "../../lib/desktop";
 
 const displayMetaByKey = new Map<string, (typeof activityDisplayRegistry)[number]>(
   activityDisplayRegistry.map((item) => [item.key, item]),
@@ -17,6 +17,64 @@ type ActivityDisplaySlice = {
   color: string;
   seconds: number;
 };
+
+export type TrendChartPoint = {
+  bucket: TrendBucket | null;
+  date: string;
+  label: string;
+  activeSeconds: number;
+  idleSeconds: number;
+  learningSeconds: number;
+};
+
+function addCalendarDays(value: string, days: number): string {
+  const date = new Date(`${value}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function inclusiveCalendarDays(startDate: string, endDate: string): number {
+  return Math.round((Date.parse(`${endDate}T00:00:00Z`) - Date.parse(`${startDate}T00:00:00Z`)) / 86_400_000) + 1;
+}
+
+export function buildTrendChartPoints(
+  buckets: TrendBucket[],
+  startDate: string,
+  endDate: string,
+  granularity: TrendGranularity,
+  minimumDailyPoints = 7,
+): TrendChartPoint[] {
+  if (granularity !== "day") {
+    return buckets.map((bucket) => ({
+      bucket,
+      date: bucket.startDate,
+      label: bucket.startDate === bucket.endDate ? bucket.startDate : `${bucket.startDate}~${bucket.endDate}`,
+      activeSeconds: bucket.values.activeSeconds,
+      idleSeconds: bucket.values.idleSeconds,
+      learningSeconds: bucket.values.learningSeconds,
+    }));
+  }
+  const requestedDays = Math.max(1, inclusiveCalendarDays(startDate, endDate));
+  const pointCount = Math.max(minimumDailyPoints, requestedDays);
+  const chartStart = addCalendarDays(endDate, -(pointCount - 1));
+  const bucketsByDate = new Map(
+    buckets
+      .filter((bucket) => bucket.startDate === bucket.endDate)
+      .map((bucket) => [bucket.startDate, bucket]),
+  );
+  return Array.from({ length: pointCount }, (_, index) => {
+    const date = addCalendarDays(chartStart, index);
+    const bucket = bucketsByDate.get(date) ?? null;
+    return {
+      bucket,
+      date,
+      label: date,
+      activeSeconds: bucket?.values.activeSeconds ?? 0,
+      idleSeconds: bucket?.values.idleSeconds ?? 0,
+      learningSeconds: bucket?.values.learningSeconds ?? 0,
+    };
+  });
+}
 
 function legacyDisplayMeta(key: string) {
   if (key === "unknown_video") return displayMetaForKey("unknown_video");
@@ -50,24 +108,48 @@ function scopedCategoryDistribution(bucket: TrendBucket, activityScope: Activity
   });
 }
 
+function chartSlices(point: TrendChartPoint, activityScope: ActivityScope): ActivityDisplaySlice[] {
+  const slices = point.bucket ? scopedCategoryDistribution(point.bucket, activityScope) : [];
+  if (slices.some((item) => item.seconds > 0)) return slices;
+  if (activityScope === "meaningful") return [];
+  return [
+    ...(point.activeSeconds > 0
+      ? [{ key: "active", label: "活跃", color: "#2563eb", seconds: point.activeSeconds }]
+      : []),
+    ...(point.idleSeconds > 0
+      ? [{ key: "idle", label: "不活跃", color: "#94a3b8", seconds: point.idleSeconds }]
+      : []),
+  ];
+}
+
 export function TrendStackedTimeChart({
+  points,
   buckets,
   activityScope = "all",
   selectedBucketId,
   formatDuration,
   onSelectBucket,
 }: {
-  buckets: TrendBucket[];
+  points?: TrendChartPoint[];
+  buckets?: TrendBucket[];
   activityScope?: ActivityScope;
   selectedBucketId: string | null;
   formatDuration: (seconds: number) => string;
   onSelectBucket: (bucketId: string) => void;
 }) {
   const chartRef = useRef<HTMLDivElement>(null);
+  const resolvedPoints = useMemo(() => points ?? (buckets ?? []).map((bucket) => ({
+    bucket,
+    date: bucket.startDate,
+    label: bucket.startDate === bucket.endDate ? bucket.startDate : `${bucket.startDate}~${bucket.endDate}`,
+    activeSeconds: bucket.values.activeSeconds,
+    idleSeconds: bucket.values.idleSeconds,
+    learningSeconds: bucket.values.learningSeconds,
+  })), [buckets, points]);
   const categories = useMemo(() => {
     const totals = new Map<string, ActivityDisplaySlice>();
-    for (const bucket of buckets) {
-      for (const item of scopedCategoryDistribution(bucket, activityScope)) {
+    for (const point of resolvedPoints) {
+      for (const item of chartSlices(point, activityScope)) {
         const current = totals.get(item.key);
         totals.set(item.key, current
           ? { ...current, seconds: current.seconds + item.seconds }
@@ -79,7 +161,7 @@ export function TrendStackedTimeChart({
       .filter((item) => item.seconds > 0)
       .sort((left, right) => right.seconds - left.seconds)
       .slice(0, 7)
-  }, [activityScope, buckets]);
+  }, [activityScope, resolvedPoints]);
 
   useEffect(() => {
     const element = chartRef.current;
@@ -113,15 +195,13 @@ export function TrendStackedTimeChart({
         },
         xAxis: {
           type: "category",
-          data: buckets.map((bucket) => bucket.startDate === bucket.endDate
-            ? bucket.startDate
-            : `${bucket.startDate}~${bucket.endDate}`),
+          data: resolvedPoints.map((point) => point.label),
           axisTick: { show: false },
           axisLine: { lineStyle: { color: "#dce5f1" } },
           axisLabel: {
             color: "#64748b",
             fontSize: 9,
-            interval: buckets.length > 14 ? Math.max(0, Math.floor(buckets.length / 6) - 1) : 0,
+            interval: resolvedPoints.length > 14 ? Math.max(0, Math.floor(resolvedPoints.length / 6) - 1) : 0,
             formatter: (value: string) => value.slice(5),
           },
         },
@@ -138,16 +218,19 @@ export function TrendStackedTimeChart({
           barMaxWidth: 22,
           emphasis: { focus: "series" },
           itemStyle: { color: category.color },
-          data: buckets.map((bucket) => ({
-            value: (scopedCategoryDistribution(bucket, activityScope).find((item) => item.key === category.key)?.seconds ?? 0) / 3_600,
-            itemStyle: bucket.id === selectedBucketId
+          data: resolvedPoints.map((point) => ({
+            value: (chartSlices(point, activityScope).find((item) => item.key === category.key)?.seconds ?? 0) / 3_600,
+            itemStyle: point.bucket?.id === selectedBucketId
               ? { borderColor: "#153f9f", borderWidth: 1 }
               : undefined,
           })),
         })),
       });
       chart.on("click", (event: { dataIndex?: number }) => {
-        if (typeof event.dataIndex === "number") onSelectBucket(buckets[event.dataIndex].id);
+        if (typeof event.dataIndex === "number") {
+          const bucketId = resolvedPoints[event.dataIndex]?.bucket?.id;
+          if (bucketId) onSelectBucket(bucketId);
+        }
       });
       const resize = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => chart.resize());
       resize?.observe(element);
@@ -160,28 +243,28 @@ export function TrendStackedTimeChart({
       disposed = true;
       cleanup?.();
     };
-  }, [activityScope, buckets, categories, formatDuration, onSelectBucket, selectedBucketId]);
+  }, [activityScope, categories, formatDuration, onSelectBucket, resolvedPoints, selectedBucketId]);
 
   return <div ref={chartRef} className="trend-dashboard-echart" role="img" aria-label="活动构成每日堆叠柱状图" />;
 }
 
 export function TrendWeekdayChart({
-  days,
+  points,
   formatDuration,
 }: {
-  days: TrendDay[];
+  points: TrendChartPoint[];
   formatDuration: (seconds: number) => string;
 }) {
   const chartRef = useRef<HTMLDivElement>(null);
   const weekdayTotals = useMemo(() => {
     const totals = Array.from({ length: 7 }, () => 0);
-    for (const day of days) {
-      const weekday = new Date(`${day.date}T00:00:00Z`).getUTCDay();
+    for (const point of points) {
+      const weekday = new Date(`${point.date}T00:00:00Z`).getUTCDay();
       const mondayIndex = (weekday + 6) % 7;
-      totals[mondayIndex] += day.activeSeconds;
+      totals[mondayIndex] += point.activeSeconds;
     }
     return totals;
-  }, [days]);
+  }, [points]);
 
   useEffect(() => {
     const element = chartRef.current;

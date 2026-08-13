@@ -40,7 +40,7 @@ import { TrendRangeToolbar } from "./TrendRangeToolbar";
 import { TrendStatisticsStrip } from "./TrendStatisticsStrip";
 import { TrendComparisonChart } from "./TrendComparisonChart";
 import { TrendDrilldown } from "./TrendDrilldown";
-import { TrendStackedTimeChart, TrendWeekdayChart } from "./TrendDashboardCharts";
+import { buildTrendChartPoints, TrendStackedTimeChart, TrendWeekdayChart } from "./TrendDashboardCharts";
 import { DonutChart } from "../today/analysis-shared";
 import {
   ACTIVITY_SCOPE_STORAGE_KEYS,
@@ -684,6 +684,14 @@ export function TrendWorkbench({
   const localAnalysis = workbenchPayload
     ? buildLocalTrendAnalysis(buildTrendStatisticsDto(workbenchPayload, activityScope))
     : null;
+  const trendChartPoints = useMemo(() => workbenchPayload
+    ? buildTrendChartPoints(
+      workbenchPayload.buckets,
+      workbenchPayload.range.startDate,
+      workbenchPayload.range.endDate,
+      workbenchPayload.granularity,
+    )
+    : [], [workbenchPayload]);
   const [selectedBucketId, setSelectedBucketId] = useState<string | null>(null);
   const [selectedActivityKey, setSelectedActivityKey] = useState<ActivityDisplayKey | null>(null);
   const timelineFocusRef = useRef<HTMLDivElement>(null);
@@ -773,7 +781,7 @@ export function TrendWorkbench({
             <article ref={timelineFocusRef} className="trend-dashboard-card trend-dashboard-daily" tabIndex={-1} role="region" aria-label={`已聚焦：${focusMetricLabels[metric]}每日时间图表`} data-trend-chart-focus>
               <header><h2>每日时间 <small>（{workbenchPayload.range.dayCount === 30 ? "过去 30 天" : `${workbenchPayload.range.dayCount} 天`}）</small></h2></header>
               <TrendStackedTimeChart
-                buckets={workbenchPayload.buckets}
+                points={trendChartPoints}
                 activityScope={activityScope}
                 selectedBucketId={selectedBucketId}
                 formatDuration={formatDuration}
@@ -786,7 +794,7 @@ export function TrendWorkbench({
           <div className="trend-dashboard-lower">
             <article className="trend-dashboard-card trend-dashboard-weekday">
               <header><h2>按星期分布 <small>（活跃时间）</small></h2></header>
-              <TrendWeekdayChart days={payload?.days ?? []} formatDuration={formatDuration} />
+              <TrendWeekdayChart points={trendChartPoints} formatDuration={formatDuration} />
             </article>
             <div className="trend-dashboard-analysis">
               <p className="trend-analysis-scope">分析口径：{activityScope === "all" ? "全部活动" : "学习"}</p>
