@@ -58,20 +58,17 @@ AI 分类置信度大于等于 `0.85` 时可以自动应用；低于 `0.85` 时�
 
 ## Codex 路径配置
 
-默认可执行文件名是 `codex`。Windows 会检查应用安装目录和 PATH；macOS 还会检查 `~/.local/bin`、npm/pnpm、nvm、Volta、Bun、Homebrew 以及 ChatGPT 应用内置 CLI，因为从 Finder 启动的应用通常不会继承交互式 shell 的 PATH。
-
-如果自动检测仍未命中，可以在设置中填写可执行文件的绝对路径，例如：
+默认可执行文件名是 `codex`。如果 Codex 不在当前桌面进程的 `PATH` 中，请在设置中填写可执行文件的绝对路径，例如：
 
 ```text
 C:\Users\<用户名>\AppData\Roaming\npm\codex.cmd
-/Users/<用户名>/.local/bin/codex
 ```
 
-也可以填写实际安装位置中的 `codex.exe`。保存后运行 Codex 健康检查；后台检查验证版本和登录状态，手动测试还会执行一次最小结构化推理，两者都不会改用 API 通道。Orbit 会在独立的临时工作目录中启动 CLI，不依赖应用从终端或 Finder 的哪个目录启动。
+也可以填写实际安装位置中的 `codex.exe`。保存后运行 Codex 健康检查；检查结果只验证本机命令是否可启动，不会改用 API 通道。
 
 ## 故障排查
 
-- **找不到 Codex 或 Access denied / OS error 5**：确认路径指向真实的 Codex 可执行文件且当前用户有读取和执行权限；WindowsApps 别名可能被系统策略阻止。macOS 可运行 `command -v codex` 查看实际路径，并在设置中用绝对路径交叉验证。
+- **找不到 Codex 或 Access denied / OS error 5**：确认路径指向真实的 `codex.exe` 或 `codex.cmd`，当前用户有读取和执行权限；WindowsApps 别名可能被系统策略阻止，可改用实际安装路径。
 - **Codex 健康检查成功但任务失败**：在“执行失败”页查看清洗后的诊断，确认本机 Codex 已登录、模型可用且工作目录可访问。
 - **API 任务失败**：检查所选提供商、模型、Base URL、网络和 Credential Manager 中的 Key；应用不会尝试另一家提供商或 Codex。
 - **切换通道后旧任务仍使用原通道**：这是预期行为。使用“按当前模式重试”才会按新设置创建任务。

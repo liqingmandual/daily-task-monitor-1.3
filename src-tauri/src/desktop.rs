@@ -1,22 +1,17 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
-use directories::{ProjectDirs, UserDirs};
+use directories::UserDirs;
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-#[cfg(target_os = "macos")]
-use tauri::menu::{Menu, MenuItemKind, PredefinedMenuItem};
-use tauri::menu::{MenuBuilder, MenuItem};
+use tauri::menu::MenuBuilder;
 use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager, State};
-#[cfg(target_os = "macos")]
-use tauri_plugin_notification::{NotificationExt, PermissionState};
 use url::Url;
 #[cfg(target_os = "windows")]
 use windows::Win32::Graphics::Gdi::{
@@ -49,33 +44,23 @@ use crate::ai_executor::{
 };
 use crate::ai_review::{AiReviewFilter, AiReviewRecord, AiReviewResolution};
 use crate::app::{
-    AppService, AppSettings, ClassificationRulePreview, DailyAnalysisResult, DashboardSnapshot,
-    EvidenceBasedFinding, SettingsPatch, TrendAnalysisJobPayload, TrendAnalysisResult, UiTheme,
-    render_daily_markdown, render_trend_markdown_with_workbench, trend_analysis_allowed_candidates,
+    AppService, AppSettings, DailyAnalysisResult, DashboardSnapshot, EvidenceBasedFinding,
+    SettingsPatch, TrendAnalysisJobPayload, TrendAnalysisResult, render_daily_markdown,
+    render_trend_markdown_with_workbench, trend_analysis_allowed_candidates,
 };
 use crate::browser::{fetch_public_html_summary, redact_url_for_storage, scan_chromium_history};
-use crate::browser_watcher::{BrowserHeartbeat, BrowserWatcherEngine, is_browser_application};
-use crate::browser_watcher_server::{BROWSER_WATCHER_ENDPOINT, run_browser_watcher_server};
-use crate::context::{ExternalContextItem, parse_ics_calendar, parse_project_context_json};
 use crate::db::{
-    ActivitySampleWrite, ActivitySegmentRecord, DailyGoalRecord, Database, FocusSessionRecord,
+    ActivitySampleWrite, ActivitySegmentRecord, DailyGoalRecord, Database,
     MonitoringContinuityCheckpoint,
 };
 use crate::domain::{ActivityCategory, ActivityScope, TrendPayload, VideoPurpose};
 use crate::edition::current_edition_identity;
 use crate::knowledge_graph::{KnowledgeGraphFilters, KnowledgeGraphPayload};
 use crate::legacy::{LegacyImportResult, import_activity_jsonl};
-#[cfg(target_os = "macos")]
-use crate::macos_collector::{
-    MacOsCollector as PlatformCollector, screen_recording_permission_granted, system_uptime_ms,
-};
 use crate::monitor::MonitorEngine;
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "windows")]
 use crate::monitor_continuity::{continuity_gap_segment, monitoring_gap_from_checkpoint};
 use crate::report::{ReportBlock, ReportDocument, render_docx, render_markdown};
-use crate::sync::{
-    SyncImportResult, SyncStatus, decode_sync_bundle, encode_sync_bundle, make_sync_bundle,
-};
 use crate::trend_analysis::{
     TrendResearchAnalysis, TrendResearchJobPayload, parse_trend_research_response,
     trend_research_protocol_prompt,
@@ -84,7 +69,7 @@ use crate::trends::{
     TrendSelectionMode, TrendWorkbenchError, TrendWorkbenchPayload, TrendWorkbenchRequest,
 };
 #[cfg(target_os = "windows")]
-use crate::windows_collector::{WindowsCollector as PlatformCollector, system_uptime_ms};
+use crate::windows_collector::{WindowsCollector, system_uptime_ms};
 use crate::work_ledger::commands::{
     DailyActualOutputProgressRequest, DailyGoalTaskConfirmationRequest, EvidenceAssignmentRequest,
     MergeTasksRequest, ProgressEntryRequest, ProjectSaveRequest, SuggestedAssignmentRequest,
@@ -117,14 +102,6 @@ use crate::work_ledger::{
 pub const AI_CONNECTION_HEALTH_CHANGED_EVENT: &str = "ai-connection-health-changed";
 pub const WORKFLOW_CHANGED_EVENT: &str = "workflow-changed";
 pub const ANALYSIS_CHANGED_EVENT: &str = "analysis-changed";
-pub const ACTIVITY_CHANGED_EVENT: &str = "activity-changed";
-pub const COLLECTION_HEALTH_CHANGED_EVENT: &str = "collection-health-changed";
-pub const OPEN_SETTINGS_EVENT: &str = "open-settings";
-pub const FOCUS_TIMER_CHANGED_EVENT: &str = "focus-timer-changed";
-const ORBIT_TRAY_ID: &str = "orbit-main-tray";
-const FOCUS_START_MENU_ID: &str = "focus-start";
-const FOCUS_PAUSE_MENU_ID: &str = "focus-pause";
-const FOCUS_END_MENU_ID: &str = "focus-end";
 const AI_CONNECTION_HEALTH_INTERVAL: Duration = Duration::from_secs(10);
 const API_HEALTH_TIMEOUT: Duration = Duration::from_secs(8);
 const CODEX_HEALTH_TIMEOUT_MS: u64 = 5_000;
@@ -133,171 +110,9 @@ const AI_INFERENCE_VERIFICATION_TTL_MS: i64 = 30 * 60 * 1_000;
 static APP_IDENTITY_CACHE: OnceLock<Mutex<HashMap<String, CachedExecutableIdentity>>> =
     OnceLock::new();
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct FocusTimerStatus {
-    session_id: String,
-    goal_date: String,
-    goal_text: String,
-    planned_minutes: u32,
-    started_at_ms: i64,
-    ends_at_ms: i64,
-    remaining_seconds: i64,
-    expired: bool,
-    paused: bool,
-    task_id: Option<String>,
-}
-
-#[derive(Clone)]
-struct FocusTrayMenuItems {
-    start: MenuItem<tauri::Wry>,
-    pause: MenuItem<tauri::Wry>,
-    end: MenuItem<tauri::Wry>,
-}
-
-fn focus_timer_status(session: FocusSessionRecord, observed_at_ms: i64) -> FocusTimerStatus {
-    let scheduled_end_ms = session
-        .started_at_ms
-        .saturating_add(i64::from(session.planned_minutes).saturating_mul(60_000))
-        .saturating_add(session.paused_total_ms.max(0));
-    let comparison_ms = session.paused_at_ms.unwrap_or(observed_at_ms);
-    let remaining_ms = scheduled_end_ms.saturating_sub(comparison_ms);
-    FocusTimerStatus {
-        session_id: session.id,
-        goal_date: session.goal_date,
-        goal_text: session.goal_text,
-        planned_minutes: session.planned_minutes,
-        started_at_ms: session.started_at_ms,
-        ends_at_ms: scheduled_end_ms,
-        remaining_seconds: if remaining_ms > 0 {
-            remaining_ms.saturating_add(999) / 1_000
-        } else {
-            0
-        },
-        expired: remaining_ms <= 0,
-        paused: session.paused_at_ms.is_some(),
-        task_id: session.task_id,
-    }
-}
-
-fn format_focus_countdown(remaining_seconds: i64) -> String {
-    let minutes = remaining_seconds.max(0) / 60;
-    let seconds = remaining_seconds.max(0) % 60;
-    format!("{minutes:02}:{seconds:02}")
-}
-
-fn focus_tray_title(status: Option<&FocusTimerStatus>) -> String {
-    status.map_or_else(String::new, |status| {
-        let pause_marker = if status.paused { " ⏸" } else { "" };
-        format!(
-            "🍅 {}{pause_marker}",
-            format_focus_countdown(status.remaining_seconds)
-        )
-    })
-}
-
-fn focus_pause_menu_label(status: Option<&FocusTimerStatus>) -> &'static str {
-    match status {
-        Some(status) if status.paused => "继续番茄钟",
-        _ => "暂停番茄钟",
-    }
-}
-
-fn same_focus_runtime_state(
-    previous: &Option<FocusTimerStatus>,
-    current: &Option<FocusTimerStatus>,
-) -> bool {
-    match (previous, current) {
-        (None, None) => true,
-        (Some(previous), Some(current)) => {
-            previous.session_id == current.session_id
-                && previous.ends_at_ms == current.ends_at_ms
-                && previous.paused == current.paused
-                && previous.expired == current.expired
-                && previous.task_id == current.task_id
-        }
-        _ => false,
-    }
-}
-
 pub struct DesktopState {
     service: Mutex<AppService>,
-    focus_tray_menu: Mutex<Option<FocusTrayMenuItems>>,
     ai_connection_health: AiConnectionHealthServiceState,
-    collection_runtime: Mutex<CollectionRuntimeState>,
-    browser_watcher: BrowserWatcherServiceState,
-}
-
-#[derive(Debug, Default)]
-struct CollectionRuntimeState {
-    last_persisted_at_ms: Option<i64>,
-    last_app_available_at_ms: Option<i64>,
-    last_title_available_at_ms: Option<i64>,
-    last_idle_read_at_ms: Option<i64>,
-    last_continuity_gap_at_ms: Option<i64>,
-    last_browser_history_scan_at_ms: Option<i64>,
-}
-
-#[derive(Debug, Default)]
-struct BrowserWatcherRuntimeState {
-    engine: BrowserWatcherEngine,
-    listener_ready: bool,
-    listener_error: Option<String>,
-    last_heartbeat_at_ms: Option<i64>,
-    last_persisted_at_ms: Option<i64>,
-    connected_sources: HashMap<String, i64>,
-}
-
-struct BrowserWatcherServiceState {
-    token: String,
-    runtime: Mutex<BrowserWatcherRuntimeState>,
-}
-
-impl BrowserWatcherServiceState {
-    fn new(token: String) -> Self {
-        Self {
-            token,
-            runtime: Mutex::new(BrowserWatcherRuntimeState::default()),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-enum CollectionChannelStatus {
-    Healthy,
-    Degraded,
-    Paused,
-    Unavailable,
-    PermissionDenied,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CollectionChannelHealth {
-    status: CollectionChannelStatus,
-    last_success_at_ms: Option<i64>,
-    detail: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CollectionHealth {
-    generated_at_ms: i64,
-    platform: String,
-    monitoring_enabled: bool,
-    desktop: CollectionChannelHealth,
-    window_title: CollectionChannelHealth,
-    idle: CollectionChannelHealth,
-    continuity: CollectionChannelHealth,
-    screen_recording: CollectionChannelHealth,
-    browser_watcher: CollectionChannelHealth,
-    browser_history: CollectionChannelHealth,
-    watcher_endpoint: String,
-    watcher_token: String,
-    watcher_source_count: usize,
-    measured_browser_slice_count: i64,
-    measured_browser_seconds: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -570,8 +385,6 @@ pub struct ManualClassificationRequest {
     pub video_purpose: VideoPurpose,
     #[serde(default)]
     pub reason: String,
-    #[serde(default)]
-    pub create_future_rule: bool,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -708,15 +521,7 @@ fn save_work_ledger_project(
     state: State<'_, DesktopState>,
     request: ProjectSaveRequest,
 ) -> Result<Project, String> {
-    let project = command_save_work_ledger_project(state.clone(), request)?;
-    append_organization_sync_event(
-        state_service(&state)?.database(),
-        "project",
-        &project.id,
-        project.updated_at_ms,
-        &project,
-    )?;
-    Ok(project)
+    command_save_work_ledger_project(state, request)
 }
 
 #[tauri::command]
@@ -724,24 +529,7 @@ fn archive_work_ledger_project(
     state: State<'_, DesktopState>,
     project_id: String,
 ) -> Result<bool, String> {
-    let changed = command_archive_work_ledger_project(state.clone(), project_id.clone())?;
-    if changed {
-        let service = state_service(&state)?;
-        let ledger = WorkLedgerService::new(WorkLedgerRepository::new(service.database()));
-        if let Some(project) = ledger
-            .get_project(&project_id)
-            .map_err(|error| error.to_string())?
-        {
-            append_organization_sync_event(
-                service.database(),
-                "project",
-                &project.id,
-                project.updated_at_ms,
-                &project,
-            )?;
-        }
-    }
-    Ok(changed)
+    command_archive_work_ledger_project(state, project_id)
 }
 
 #[tauri::command]
@@ -749,15 +537,7 @@ fn save_work_ledger_task(
     state: State<'_, DesktopState>,
     request: TaskSaveRequest,
 ) -> Result<Task, String> {
-    let task = command_save_work_ledger_task(state.clone(), request)?;
-    append_organization_sync_event(
-        state_service(&state)?.database(),
-        "task",
-        &task.id,
-        task.updated_at_ms,
-        &task,
-    )?;
-    Ok(task)
+    command_save_work_ledger_task(state, request)
 }
 
 #[tauri::command]
@@ -765,29 +545,7 @@ fn update_work_ledger_task_status(
     state: State<'_, DesktopState>,
     request: TaskStatusUpdateRequest,
 ) -> Result<Task, String> {
-    let task = command_update_work_ledger_task_status(state.clone(), request)?;
-    append_organization_sync_event(
-        state_service(&state)?.database(),
-        "task",
-        &task.id,
-        task.updated_at_ms,
-        &task,
-    )?;
-    Ok(task)
-}
-
-fn append_organization_sync_event<T: Serialize>(
-    database: &Database,
-    entity_kind: &str,
-    entity_id: &str,
-    occurred_at_ms: i64,
-    value: &T,
-) -> Result<(), String> {
-    let payload = serde_json::to_string(value).map_err(|error| error.to_string())?;
-    database
-        .append_local_sync_event(occurred_at_ms, entity_kind, entity_id, "upsert", &payload)
-        .map(|_| ())
-        .map_err(|error| error.to_string())
+    command_update_work_ledger_task_status(state, request)
 }
 
 #[tauri::command]
@@ -882,17 +640,16 @@ fn resolve_app_identities(apps: Vec<AppIdentityRequest>) -> Vec<AppIdentityDto> 
             }
 
             let cached = resolve_executable_identity(&executable_path);
-            let display_name =
-                canonical_display_name(&raw_name, &cached.product_name, &executable_path);
-            let icon_data_url = cached
-                .icon_data_url
-                .or_else(|| embedded_product_icon_data_url(&executable_path));
             Some(AppIdentityDto {
-                display_name,
+                display_name: canonical_display_name(
+                    &raw_name,
+                    &cached.product_name,
+                    &executable_path,
+                ),
                 raw_name,
                 executable_path,
                 product_name: cached.product_name,
-                icon_data_url,
+                icon_data_url: cached.icon_data_url,
             })
         })
         .collect()
@@ -1042,16 +799,6 @@ fn png_data_url(bytes: &[u8]) -> String {
     )
 }
 
-fn embedded_product_icon_data_url(executable_path: &str) -> Option<String> {
-    let current_executable = std::env::current_exe().ok()?;
-    let current_key = normalize_executable_path(current_executable.to_str()?);
-    let requested_key = normalize_executable_path(executable_path);
-    if requested_key.is_empty() || requested_key != current_key {
-        return None;
-    }
-    Some(png_data_url(include_bytes!("../icons/icon.png")))
-}
-
 #[cfg(target_os = "windows")]
 fn extract_executable_icon(executable_path: &str) -> Option<Vec<u8>> {
     if executable_path.is_empty() || !Path::new(executable_path).is_file() {
@@ -1076,56 +823,7 @@ fn extract_executable_icon(executable_path: &str) -> Option<Vec<u8>> {
     bytes
 }
 
-#[cfg(target_os = "macos")]
-fn extract_executable_icon(executable_path: &str) -> Option<Vec<u8>> {
-    let executable = Path::new(executable_path);
-    let app_bundle = executable
-        .ancestors()
-        .find(|path| path.extension().is_some_and(|extension| extension == "app"))?;
-    let info_plist = app_bundle.join("Contents/Info.plist");
-    let icon_name = Command::new("/usr/bin/plutil")
-        .args(["-extract", "CFBundleIconFile", "raw", "-o", "-"])
-        .arg(&info_plist)
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .and_then(|output| String::from_utf8(output.stdout).ok())?
-        .trim()
-        .to_string();
-    if icon_name.is_empty() || icon_name.starts_with('.') {
-        return None;
-    }
-    let icon_name = if Path::new(&icon_name).extension().is_some() {
-        icon_name
-    } else {
-        format!("{icon_name}.icns")
-    };
-    let icon_path = app_bundle.join("Contents/Resources").join(icon_name);
-    if !icon_path.is_file() {
-        return None;
-    }
-
-    let output_path = std::env::temp_dir().join(format!(
-        "daily-task-monitor-icon-{:x}.png",
-        Sha256::digest(executable_path.as_bytes())
-    ));
-    let converted = Command::new("/usr/bin/sips")
-        .args(["-s", "format", "png"])
-        .arg(&icon_path)
-        .arg("--out")
-        .arg(&output_path)
-        .output()
-        .ok()
-        .is_some_and(|output| output.status.success());
-    let bytes = converted
-        .then(|| fs::read(&output_path).ok())
-        .flatten()
-        .filter(|bytes| is_png(bytes));
-    let _ = fs::remove_file(output_path);
-    bytes
-}
-
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+#[cfg(not(target_os = "windows"))]
 fn extract_executable_icon(_executable_path: &str) -> Option<Vec<u8>> {
     None
 }
@@ -1359,96 +1057,6 @@ fn get_settings(state: State<'_, DesktopState>) -> Result<AppSettings, String> {
 }
 
 #[tauri::command]
-fn list_system_fonts() -> Result<Vec<String>, String> {
-    let output = if cfg!(target_os = "windows") {
-        Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                "[Console]::OutputEncoding=[Text.UTF8Encoding]::new(); (Get-Item 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts').Property",
-            ])
-            .output()
-    } else if cfg!(target_os = "macos") {
-        Command::new("system_profiler")
-            .args(["SPFontsDataType", "-json", "-detailLevel", "mini"])
-            .output()
-    } else {
-        Command::new("fc-list").args([":", "family"]).output()
-    }
-    .map_err(|error| format!("无法读取系统字体：{error}"))?;
-    if !output.status.success() {
-        return Err("系统字体枚举命令执行失败".to_string());
-    }
-
-    let raw = String::from_utf8_lossy(&output.stdout);
-    let mut fonts = HashSet::new();
-    if cfg!(target_os = "macos") {
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) {
-            collect_font_families(&value, &mut fonts);
-        }
-    } else if cfg!(target_os = "windows") {
-        for line in raw.lines() {
-            insert_font_family(line, &mut fonts);
-        }
-    } else {
-        for family_group in raw.lines() {
-            for family in family_group.split(',') {
-                insert_font_family(family, &mut fonts);
-            }
-        }
-    }
-    fonts.insert("Ubuntu".to_string());
-    let mut fonts = fonts.into_iter().collect::<Vec<_>>();
-    fonts.sort_by_key(|font| font.to_lowercase());
-    Ok(fonts)
-}
-
-fn insert_font_family(value: &str, fonts: &mut HashSet<String>) {
-    let raw_name = value
-        .split(" (")
-        .next()
-        .unwrap_or(value)
-        .trim()
-        .trim_matches('"');
-    let lowercase = raw_name.to_lowercase();
-    let name = [".ttf", ".tff", ".otf", ".ttc", ".dfont"]
-        .iter()
-        .find(|extension| lowercase.ends_with(*extension))
-        .map(|extension| &raw_name[..raw_name.len() - extension.len()])
-        .unwrap_or(raw_name)
-        .trim();
-    if !name.is_empty()
-        && !name.starts_with('.')
-        && name.len() <= 120
-        && !name.chars().any(char::is_control)
-    {
-        fonts.insert(name.to_string());
-    }
-}
-
-fn collect_font_families(value: &serde_json::Value, fonts: &mut HashSet<String>) {
-    match value {
-        serde_json::Value::Object(object) => {
-            for (key, value) in object {
-                if matches!(key.as_str(), "family" | "family_name" | "_name") {
-                    if let Some(name) = value.as_str() {
-                        insert_font_family(name, fonts);
-                    }
-                }
-                collect_font_families(value, fonts);
-            }
-        }
-        serde_json::Value::Array(values) => {
-            for value in values {
-                collect_font_families(value, fonts);
-            }
-        }
-        _ => {}
-    }
-}
-
-#[tauri::command]
 fn list_ai_reviews(
     state: State<'_, DesktopState>,
     filter: AiReviewFilter,
@@ -1555,7 +1163,6 @@ fn retry_ai_review(
 
 #[tauri::command]
 fn update_settings(
-    app: tauri::AppHandle,
     state: State<'_, DesktopState>,
     patch: SettingsPatch,
 ) -> Result<AppSettings, String> {
@@ -1581,49 +1188,9 @@ fn update_settings(
         }
         selected_api_provider(&candidate, &providers)?;
     }
-    let settings = service
+    service
         .update_settings(patch)
-        .map_err(|error| error.to_string())?;
-    #[cfg(target_os = "macos")]
-    apply_macos_window_theme(&app, settings.ui_theme);
-    Ok(settings)
-}
-
-#[cfg(target_os = "macos")]
-fn macos_theme_rgb(theme: UiTheme) -> (u8, u8, u8) {
-    match theme {
-        UiTheme::MossNocturne => (0xf8, 0xf1, 0xdf),
-        UiTheme::ClassicWorkbench => (0xf4, 0xf7, 0xfa),
-        UiTheme::MoonGlass => (0xed, 0xf7, 0xfb),
-        UiTheme::SoftPaper => (0xf4, 0xf3, 0xf7),
-        UiTheme::BlueprintData => (0xed, 0xf3, 0xf7),
-        UiTheme::KnowledgeSpace => (0x05, 0x09, 0x14),
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn apply_macos_window_theme(app: &tauri::AppHandle, theme: UiTheme) {
-    use objc2_app_kit::{NSColor, NSTitlebarSeparatorStyle, NSWindow};
-
-    let Some(window) = app.get_webview_window("main") else {
-        return;
-    };
-    let (red, green, blue) = macos_theme_rgb(theme);
-    let native_window = window.clone();
-    let _ = window.run_on_main_thread(move || {
-        let Ok(ns_window_ptr) = native_window.ns_window() else {
-            return;
-        };
-        let ns_window = unsafe { &*(ns_window_ptr as *mut NSWindow) };
-        let color = NSColor::colorWithRed_green_blue_alpha(
-            f64::from(red) / 255.0,
-            f64::from(green) / 255.0,
-            f64::from(blue) / 255.0,
-            1.0,
-        );
-        ns_window.setBackgroundColor(Some(&color));
-        ns_window.setTitlebarSeparatorStyle(NSTitlebarSeparatorStyle::None);
-    });
+        .map_err(|error| error.to_string())
 }
 
 fn settings_patch_requires_api_provider_validation(patch: &SettingsPatch) -> bool {
@@ -1644,9 +1211,9 @@ fn set_monitoring_state(
         })
         .map_err(|error| error.to_string())?;
     let observed_at_ms = now_ms();
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(target_os = "windows")]
     let uptime_ms = system_uptime_ms();
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(target_os = "windows"))]
     let uptime_ms = 0;
     service
         .database()
@@ -1677,155 +1244,7 @@ fn save_manual_classification(
             request.category,
             request.video_purpose,
             reason,
-            request.create_future_rule,
         )
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-fn preview_manual_classification_rule(
-    state: State<'_, DesktopState>,
-    request: ManualClassificationRequest,
-) -> Result<Option<ClassificationRulePreview>, String> {
-    state_service(&state)?
-        .preview_manual_classification_rule(
-            &request.segment_id,
-            request.category,
-            request.video_purpose,
-        )
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-fn get_sync_status(state: State<'_, DesktopState>) -> Result<SyncStatus, String> {
-    state_service(&state)?
-        .database()
-        .sync_status(now_ms())
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-fn export_sync_bundle(
-    state: State<'_, DesktopState>,
-    passphrase: String,
-) -> Result<Option<String>, String> {
-    let bytes = {
-        let service = state_service(&state)?;
-        service
-            .database()
-            .ensure_organization_sync_snapshot()
-            .map_err(|error| error.to_string())?;
-        let device_id = service
-            .database()
-            .local_sync_device_id(now_ms())
-            .map_err(|error| error.to_string())?;
-        let events = service
-            .database()
-            .list_sync_events()
-            .map_err(|error| error.to_string())?;
-        let bundle = make_sync_bundle(device_id, now_ms(), events)?;
-        encode_sync_bundle(
-            &bundle,
-            (!passphrase.is_empty()).then_some(passphrase.as_str()),
-        )?
-    };
-    let extension = if passphrase.is_empty() {
-        "json"
-    } else {
-        "orbit-sync"
-    };
-    let Some(output) = rfd::FileDialog::new()
-        .add_filter("Orbit 同步包", &[extension])
-        .set_file_name(&format!("orbit-sync.{extension}"))
-        .save_file()
-    else {
-        return Ok(None);
-    };
-    fs::write(&output, bytes).map_err(|error| error.to_string())?;
-    Ok(Some(output.to_string_lossy().into_owned()))
-}
-
-#[tauri::command]
-fn import_sync_bundle(
-    state: State<'_, DesktopState>,
-    passphrase: String,
-) -> Result<Option<SyncImportResult>, String> {
-    let Some(path) = rfd::FileDialog::new()
-        .add_filter("Orbit 同步包", &["orbit-sync", "json"])
-        .pick_file()
-    else {
-        return Ok(None);
-    };
-    let bytes = fs::read(&path).map_err(|error| error.to_string())?;
-    let bundle = decode_sync_bundle(
-        &bytes,
-        (!passphrase.is_empty()).then_some(passphrase.as_str()),
-    )?;
-    let bundle_event_count = bundle.events.len();
-    let source_device_id = bundle.source_device_id.clone();
-    let inserted_event_count = state_service(&state)?
-        .database()
-        .import_sync_events(bundle.events, now_ms())
-        .map_err(|error| error.to_string())?;
-    Ok(Some(SyncImportResult {
-        inserted_event_count,
-        bundle_event_count,
-        source_device_id,
-        path: path.to_string_lossy().into_owned(),
-    }))
-}
-
-#[tauri::command]
-fn import_calendar_context(state: State<'_, DesktopState>) -> Result<Option<usize>, String> {
-    let Some(path) = rfd::FileDialog::new()
-        .add_filter("iCalendar", &["ics"])
-        .pick_file()
-    else {
-        return Ok(None);
-    };
-    let contents = fs::read_to_string(&path).map_err(|error| error.to_string())?;
-    let source_name = path
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or("Calendar");
-    // Persist a stable opaque identifier, never the user's local file path.
-    let source_hash = format!("{:x}", Sha256::digest(path.to_string_lossy().as_bytes()));
-    let source_id = format!("ics-{}", &source_hash[..16]);
-    let import = parse_ics_calendar(&source_id, source_name, &contents, now_ms())?;
-    state_service(&state)?
-        .database()
-        .import_external_context(&import)
-        .map(Some)
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-fn import_project_context(state: State<'_, DesktopState>) -> Result<Option<usize>, String> {
-    let Some(path) = rfd::FileDialog::new()
-        .add_filter("Orbit 项目上下文", &["json"])
-        .pick_file()
-    else {
-        return Ok(None);
-    };
-    let contents = fs::read_to_string(path).map_err(|error| error.to_string())?;
-    let import = parse_project_context_json(&contents, now_ms())?;
-    state_service(&state)?
-        .database()
-        .import_external_context(&import)
-        .map(Some)
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-fn get_external_context(
-    state: State<'_, DesktopState>,
-    start_ms: i64,
-    end_ms: i64,
-) -> Result<Vec<ExternalContextItem>, String> {
-    state_service(&state)?
-        .database()
-        .list_external_context(start_ms, end_ms)
         .map_err(|error| error.to_string())
 }
 
@@ -2031,135 +1450,7 @@ fn queue_trend_research_analysis(
 }
 
 #[tauri::command]
-fn get_focus_timer_status(
-    state: State<'_, DesktopState>,
-) -> Result<Option<FocusTimerStatus>, String> {
-    state_service(&state)?
-        .database()
-        .active_focus_session()
-        .map(|session| session.map(|session| focus_timer_status(session, now_ms())))
-        .map_err(|error| error.to_string())
-}
-
-#[cfg(target_os = "macos")]
-fn update_focus_tray(app: &tauri::AppHandle, status: Option<&FocusTimerStatus>) {
-    let Some(tray) = app.tray_by_id(ORBIT_TRAY_ID) else {
-        return;
-    };
-    let title = focus_tray_title(status);
-    let tooltip = status.map_or_else(
-        || "Orbit".to_string(),
-        |status| {
-            format!(
-                "Orbit Focus · {}",
-                format_focus_countdown(status.remaining_seconds)
-            )
-        },
-    );
-    // tray-icon 0.24 treats `None` as "leave the NSStatusItem title unchanged".
-    // An explicit empty string is required to remove a finished Focus countdown.
-    let _ = tray.set_title(Some(title.as_str()));
-    let _ = tray.set_tooltip(Some(tooltip));
-}
-
-#[cfg(not(target_os = "macos"))]
-fn update_focus_tray(_app: &tauri::AppHandle, _status: Option<&FocusTimerStatus>) {}
-
-#[cfg(target_os = "macos")]
-fn send_focus_completed_notification(app: &tauri::AppHandle) {
-    let notification = app.notification();
-    let permission = match notification.permission_state() {
-        Ok(PermissionState::Granted) => PermissionState::Granted,
-        Ok(PermissionState::Prompt | PermissionState::PromptWithRationale) => {
-            match notification.request_permission() {
-                Ok(permission) => permission,
-                Err(_) => return,
-            }
-        }
-        Ok(PermissionState::Denied) | Err(_) => return,
-    };
-    if permission != PermissionState::Granted {
-        return;
-    }
-
-    let _ = notification
-        .builder()
-        .title("番茄钟结束")
-        .body("本轮专注已经结束，起来活动一下吧。")
-        .show();
-}
-
-#[cfg(not(target_os = "macos"))]
-fn send_focus_completed_notification(_app: &tauri::AppHandle) {}
-
-fn update_focus_menu(app: &tauri::AppHandle, status: Option<&FocusTimerStatus>) {
-    let Some(state) = app.try_state::<DesktopState>() else {
-        return;
-    };
-    let Ok(menu) = state.focus_tray_menu.lock() else {
-        return;
-    };
-    let Some(menu) = menu.as_ref() else {
-        return;
-    };
-    let has_active_session = status.is_some();
-    let can_pause = status.is_some_and(|status| !status.expired);
-    let _ = menu.start.set_enabled(!has_active_session);
-    let _ = menu.pause.set_enabled(can_pause);
-    let _ = menu.pause.set_text(focus_pause_menu_label(status));
-    let _ = menu.end.set_enabled(has_active_session);
-}
-
-fn publish_focus_status(app: &tauri::AppHandle, status: Option<FocusTimerStatus>) {
-    update_focus_tray(app, status.as_ref());
-    update_focus_menu(app, status.as_ref());
-    let _ = app.emit(FOCUS_TIMER_CHANGED_EVENT, status);
-}
-
-fn start_focus_timer_worker(app: tauri::AppHandle) {
-    std::thread::spawn(move || {
-        let mut last_status = None::<Option<FocusTimerStatus>>;
-        loop {
-            let observed_at_ms = now_ms();
-            let current = app.try_state::<DesktopState>().and_then(|state| {
-                let service = state.service.lock().ok()?;
-                let session = service.database().active_focus_session().ok()?;
-                let status = session.map(|session| focus_timer_status(session, observed_at_ms));
-                let completed = status.as_ref().is_some_and(|status| {
-                    status.expired
-                        && service
-                            .database()
-                            .complete_expired_focus_session(
-                                &status.session_id,
-                                status.ends_at_ms,
-                                observed_at_ms,
-                            )
-                            .unwrap_or(false)
-                });
-                Some((if completed { None } else { status }, completed))
-            });
-            if let Some((current, should_notify)) = current {
-                update_focus_tray(&app, current.as_ref());
-                if last_status
-                    .as_ref()
-                    .is_none_or(|last_status| !same_focus_runtime_state(last_status, &current))
-                {
-                    update_focus_menu(&app, current.as_ref());
-                    let _ = app.emit(FOCUS_TIMER_CHANGED_EVENT, current.clone());
-                    last_status = Some(current);
-                }
-                if should_notify {
-                    send_focus_completed_notification(&app);
-                }
-            }
-            std::thread::sleep(Duration::from_secs(1));
-        }
-    });
-}
-
-#[tauri::command]
 fn start_focus_session(
-    app: tauri::AppHandle,
     state: State<'_, DesktopState>,
     goal_date: String,
     goal_text: String,
@@ -2168,10 +1459,9 @@ fn start_focus_session(
 ) -> Result<String, String> {
     let now = now_ms();
     let id = format!("focus-{now}");
-    let service = state_service(&state)?;
-    let database = service.database();
-    database
-        .start_focus_session_for_task_if_none(
+    state_service(&state)?
+        .database()
+        .start_focus_session_for_task(
             &id,
             &goal_date,
             &goal_text,
@@ -2180,242 +1470,24 @@ fn start_focus_session(
             task_id.as_deref(),
         )
         .map_err(|error| error.to_string())?;
-    let active = database
-        .active_focus_session()
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| "Focus session could not be started".to_string())?;
-    let active_id = active.id.clone();
-    let status = focus_timer_status(active, now);
-    drop(service);
-    publish_focus_status(&app, Some(status));
-    Ok(active_id)
+    Ok(id)
 }
 
 #[tauri::command]
 fn complete_focus_session(
-    app: tauri::AppHandle,
     state: State<'_, DesktopState>,
     id: String,
     outcome: String,
 ) -> Result<bool, String> {
-    let now = now_ms();
-    let service = state_service(&state)?;
-    let database = service.database();
-    let completed = database
-        .complete_focus_session(&id, now, &outcome)
-        .map_err(|error| error.to_string())?;
-    let status = database
-        .active_focus_session()
-        .map_err(|error| error.to_string())?
-        .map(|session| focus_timer_status(session, now));
-    drop(service);
-    publish_focus_status(&app, status);
-    Ok(completed)
+    state_service(&state)?
+        .database()
+        .complete_focus_session(&id, now_ms(), &outcome)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 fn get_browser_sources() -> Vec<BrowserSource> {
     discover_browser_sources()
-}
-
-#[tauri::command]
-fn get_collection_health(state: State<'_, DesktopState>) -> Result<CollectionHealth, String> {
-    let now = now_ms();
-    let service = state_service(&state)?;
-    let settings = service.get_settings().map_err(|error| error.to_string())?;
-    let (measured_browser_slice_count, measured_browser_ms, _) = service
-        .database()
-        .browser_activity_summary(now.saturating_sub(24 * 60 * 60 * 1_000), now)
-        .map_err(|error| error.to_string())?;
-    drop(service);
-
-    let runtime = state
-        .collection_runtime
-        .lock()
-        .map_err(|_| "Collection runtime state is unavailable")?;
-    let watcher = state
-        .browser_watcher
-        .runtime
-        .lock()
-        .map_err(|_| "Browser watcher state is unavailable")?;
-    let desktop = runtime_channel(
-        settings.monitoring_enabled,
-        runtime.last_app_available_at_ms,
-        now,
-        "前台应用身份采集正常",
-        "尚未收到成功的桌面采样",
-    );
-    let idle = runtime_channel(
-        settings.monitoring_enabled,
-        runtime.last_idle_read_at_ms,
-        now,
-        "键盘与鼠标空闲时钟可读取",
-        "尚未读取空闲时钟",
-    );
-    let screen_recording = screen_recording_channel(now);
-    let window_title = if !settings.monitoring_enabled {
-        paused_channel("桌面监测已暂停")
-    } else if screen_recording.status == CollectionChannelStatus::PermissionDenied {
-        CollectionChannelHealth {
-            status: CollectionChannelStatus::PermissionDenied,
-            last_success_at_ms: runtime.last_title_available_at_ms,
-            detail: "未获得屏幕录制权限；应用名仍可采集，但窗口标题可能为空".into(),
-        }
-    } else {
-        runtime_channel(
-            true,
-            runtime.last_title_available_at_ms,
-            now,
-            "窗口标题采集正常",
-            "尚未采集到窗口标题",
-        )
-    };
-    let continuity = if !settings.monitoring_enabled {
-        paused_channel("桌面监测已暂停；恢复后继续记录连续性")
-    } else {
-        CollectionChannelHealth {
-            status: desktop.status,
-            last_success_at_ms: runtime
-                .last_continuity_gap_at_ms
-                .or(runtime.last_persisted_at_ms),
-            detail: runtime
-                .last_continuity_gap_at_ms
-                .map(|_| "已检测并单独记录最近一次采集断档")
-                .unwrap_or("连续性检查运行中；睡眠和采样中断不会计入活跃时间")
-                .into(),
-        }
-    };
-    let watcher_fresh = watcher
-        .last_heartbeat_at_ms
-        .is_some_and(|last| now.saturating_sub(last) <= 90_000);
-    let browser_watcher = if !watcher.listener_ready {
-        CollectionChannelHealth {
-            status: CollectionChannelStatus::Unavailable,
-            last_success_at_ms: watcher.last_persisted_at_ms,
-            detail: watcher
-                .listener_error
-                .clone()
-                .unwrap_or_else(|| "浏览器 watcher 监听器尚未启动".into()),
-        }
-    } else if watcher_fresh {
-        CollectionChannelHealth {
-            status: CollectionChannelStatus::Healthy,
-            last_success_at_ms: watcher
-                .last_persisted_at_ms
-                .or(watcher.last_heartbeat_at_ms),
-            detail: "浏览器扩展心跳正常；时长按相邻心跳区间计量".into(),
-        }
-    } else {
-        CollectionChannelHealth {
-            status: CollectionChannelStatus::Degraded,
-            last_success_at_ms: watcher
-                .last_persisted_at_ms
-                .or(watcher.last_heartbeat_at_ms),
-            detail: "监听器已就绪，等待浏览器扩展连接".into(),
-        }
-    };
-    let available_history_sources = discover_browser_sources()
-        .into_iter()
-        .filter(|source| source.available)
-        .count();
-    let browser_history = CollectionChannelHealth {
-        status: if available_history_sources > 0 {
-            CollectionChannelStatus::Healthy
-        } else {
-            CollectionChannelStatus::Unavailable
-        },
-        last_success_at_ms: runtime.last_browser_history_scan_at_ms,
-        detail: if available_history_sources > 0 {
-            format!("{available_history_sources} 个历史数据库可读；仅作为访问证据，不计停留时长")
-        } else {
-            "未发现可读取的 Chromium 历史数据库".into()
-        },
-    };
-
-    Ok(CollectionHealth {
-        generated_at_ms: now,
-        platform: std::env::consts::OS.into(),
-        monitoring_enabled: settings.monitoring_enabled,
-        desktop,
-        window_title,
-        idle,
-        continuity,
-        screen_recording,
-        browser_watcher,
-        browser_history,
-        watcher_endpoint: BROWSER_WATCHER_ENDPOINT.into(),
-        watcher_token: state.browser_watcher.token.clone(),
-        watcher_source_count: watcher
-            .connected_sources
-            .values()
-            .filter(|observed_at_ms| now.saturating_sub(**observed_at_ms) <= 90_000)
-            .count(),
-        measured_browser_slice_count,
-        measured_browser_seconds: measured_browser_ms / 1_000,
-    })
-}
-
-fn runtime_channel(
-    monitoring_enabled: bool,
-    last_success_at_ms: Option<i64>,
-    now_ms: i64,
-    healthy_detail: &str,
-    missing_detail: &str,
-) -> CollectionChannelHealth {
-    if !monitoring_enabled {
-        return paused_channel("桌面监测已暂停");
-    }
-    match last_success_at_ms {
-        Some(last) if now_ms.saturating_sub(last) <= 20_000 => CollectionChannelHealth {
-            status: CollectionChannelStatus::Healthy,
-            last_success_at_ms: Some(last),
-            detail: healthy_detail.into(),
-        },
-        Some(last) => CollectionChannelHealth {
-            status: CollectionChannelStatus::Degraded,
-            last_success_at_ms: Some(last),
-            detail: "采集信号已超过 20 秒未更新".into(),
-        },
-        None => CollectionChannelHealth {
-            status: CollectionChannelStatus::Degraded,
-            last_success_at_ms: None,
-            detail: missing_detail.into(),
-        },
-    }
-}
-
-fn paused_channel(detail: &str) -> CollectionChannelHealth {
-    CollectionChannelHealth {
-        status: CollectionChannelStatus::Paused,
-        last_success_at_ms: None,
-        detail: detail.into(),
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn screen_recording_channel(now_ms: i64) -> CollectionChannelHealth {
-    if screen_recording_permission_granted() {
-        CollectionChannelHealth {
-            status: CollectionChannelStatus::Healthy,
-            last_success_at_ms: Some(now_ms),
-            detail: "屏幕录制权限已授予，可读取窗口标题".into(),
-        }
-    } else {
-        CollectionChannelHealth {
-            status: CollectionChannelStatus::PermissionDenied,
-            last_success_at_ms: None,
-            detail: "需要在系统设置的隐私与安全性中授予屏幕录制权限".into(),
-        }
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-fn screen_recording_channel(now_ms: i64) -> CollectionChannelHealth {
-    CollectionChannelHealth {
-        status: CollectionChannelStatus::Healthy,
-        last_success_at_ms: Some(now_ms),
-        detail: "当前平台不需要 macOS 屏幕录制权限".into(),
-    }
 }
 
 #[tauri::command]
@@ -2986,21 +2058,19 @@ where
     F: FnOnce(&str) -> Option<String>,
 {
     let configured_path = configured_path.trim().to_string();
-    let executable = if configured_path.is_empty() {
-        "codex"
+    let path = if configured_path.is_empty() {
+        Path::new("codex")
     } else {
-        &configured_path
+        Path::new(&configured_path)
     };
-    let is_bare_name = !executable.contains(['/', '\\']);
-    let detected_path = (configured_path.is_empty() || is_bare_name)
-        .then(|| detect(executable))
+    let detected_path = (configured_path.is_empty() || path.components().count() == 1)
+        .then(|| detect(path.to_string_lossy().as_ref()))
         .flatten();
     (configured_path, detected_path)
 }
 
 fn detect_executable_on_path(name: &str) -> Option<String> {
     let search_path = std::env::var_os("PATH")?;
-    #[allow(unused_mut)]
     let mut names = vec![name.to_string()];
     #[cfg(target_os = "windows")]
     if Path::new(name).extension().is_none() {
@@ -3089,13 +2159,7 @@ fn import_legacy_data(
 fn open_data_folder() -> Result<String, String> {
     let data_dir = app_data_dir();
     fs::create_dir_all(&data_dir).map_err(|error| error.to_string())?;
-    #[cfg(target_os = "windows")]
-    let opener = "explorer.exe";
-    #[cfg(target_os = "macos")]
-    let opener = "open";
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    let opener = "xdg-open";
-    std::process::Command::new(opener)
+    std::process::Command::new("explorer.exe")
         .arg(&data_dir)
         .spawn()
         .map_err(|error| error.to_string())?;
@@ -3536,179 +2600,39 @@ fn show_main_dashboard(app: &tauri::AppHandle) {
     }
 }
 
-fn start_focus_from_tray(app: &tauri::AppHandle) {
-    let now = now_ms();
-    let mut observed_status = None;
-    if let Some(state) = app.try_state::<DesktopState>()
-        && let Ok(service) = state.service.lock()
-    {
-        let database = service.database();
-        let goal_date = chrono::Local::now().format("%Y-%m-%d").to_string();
-        let goal_text = database
-            .get_daily_goal(&goal_date)
-            .map(|goal| goal.goals)
-            .ok()
-            .filter(|goal| !goal.trim().is_empty())
-            .unwrap_or_else(|| "菜单栏番茄钟".to_string());
-        let id = format!("focus-menu-{now}");
-        let _ = database
-            .start_focus_session_for_task_if_none(&id, &goal_date, &goal_text, 25, now, None);
-        observed_status = database
-            .active_focus_session()
-            .ok()
-            .map(|session| session.map(|session| focus_timer_status(session, now)));
-    }
-    if let Some(status) = observed_status {
-        publish_focus_status(app, status);
-    }
-}
-
-fn toggle_focus_pause_from_tray(app: &tauri::AppHandle) {
-    let now = now_ms();
-    let mut observed_status = None;
-    if let Some(state) = app.try_state::<DesktopState>()
-        && let Ok(service) = state.service.lock()
-    {
-        let database = service.database();
-        if let Ok(Some(session)) = database.active_focus_session() {
-            let status = focus_timer_status(session.clone(), now);
-            if !status.expired {
-                if status.paused {
-                    let _ = database.resume_focus_session(&session.id, now);
-                } else {
-                    let _ = database.pause_focus_session(&session.id, now);
-                }
-            }
-        }
-        observed_status = database
-            .active_focus_session()
-            .ok()
-            .map(|session| session.map(|session| focus_timer_status(session, now)));
-    }
-    if let Some(status) = observed_status {
-        publish_focus_status(app, status);
-    }
-}
-
-fn end_focus_from_tray(app: &tauri::AppHandle) {
-    let now = now_ms();
-    let mut observed_status = None;
-    if let Some(state) = app.try_state::<DesktopState>()
-        && let Ok(service) = state.service.lock()
-    {
-        let database = service.database();
-        if let Ok(Some(session)) = database.active_focus_session() {
-            let _ = database.complete_focus_session(&session.id, now, "");
-        }
-        observed_status = database
-            .active_focus_session()
-            .ok()
-            .map(|session| session.map(|session| focus_timer_status(session, now)));
-    }
-    if let Some(status) = observed_status {
-        publish_focus_status(app, status);
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn install_macos_app_menu(app: &mut tauri::App) -> tauri::Result<()> {
-    let menu = Menu::default(app.handle())?;
-    let settings = MenuItem::with_id(app, "open-settings", "Settings…", true, Some("CmdOrCtrl+,"))?;
-    let separator = PredefinedMenuItem::separator(app)?;
-    if let Some(MenuItemKind::Submenu(app_menu)) = menu.items()?.into_iter().next() {
-        if let Some(MenuItemKind::Predefined(about)) = app_menu.items()?.into_iter().next() {
-            about.set_text("About Orbit")?;
-        }
-        app_menu.insert_items(&[&settings, &separator], 2)?;
-    }
-    app.set_menu(menu)?;
-    app.on_menu_event(|app, event| {
-        if event.id().as_ref() == "open-settings" {
-            show_main_dashboard(app);
-            let _ = app.emit(OPEN_SETTINGS_EVENT, ());
-        }
-    });
-    Ok(())
-}
-
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
-            #[cfg(target_os = "macos")]
-            install_macos_app_menu(app)?;
-
             let data_dir = app_data_dir();
             fs::create_dir_all(&data_dir)?;
             backup_database_before_1_3_migration(&data_dir)?;
             let database = Database::open(data_dir.join("monitor.db"))?;
             database.quarantine_unavailable_codex_jobs(now_ms())?;
-            let browser_watcher_token = load_or_create_browser_watcher_token(&database)?;
-            let service = AppService::new(database);
-            #[cfg(target_os = "macos")]
-            if let Ok(settings) = service.get_settings() {
-                apply_macos_window_theme(app.handle(), settings.ui_theme);
-            }
             app.manage(DesktopState {
-                service: Mutex::new(service),
-                focus_tray_menu: Mutex::new(None),
+                service: Mutex::new(AppService::new(database)),
                 ai_connection_health: AiConnectionHealthServiceState::new(
                     AiConnectionHealth::initial(),
                 ),
-                collection_runtime: Mutex::new(CollectionRuntimeState::default()),
-                browser_watcher: BrowserWatcherServiceState::new(browser_watcher_token),
             });
             start_monitoring_worker(app.handle().clone());
-            start_browser_watcher(app.handle().clone());
             start_browser_worker(app.handle().clone());
             start_ai_worker(app.handle().clone());
             start_ai_connection_health_worker(app.handle().clone());
 
-            #[cfg(target_os = "macos")]
-            let focus_menu_items = Some(FocusTrayMenuItems {
-                start: MenuItem::with_id(
-                    app,
-                    FOCUS_START_MENU_ID,
-                    "开始番茄钟（25 分钟）",
-                    true,
-                    None::<&str>,
-                )?,
-                pause: MenuItem::with_id(
-                    app,
-                    FOCUS_PAUSE_MENU_ID,
-                    "暂停番茄钟",
-                    false,
-                    None::<&str>,
-                )?,
-                end: MenuItem::with_id(app, FOCUS_END_MENU_ID, "结束番茄钟", false, None::<&str>)?,
-            });
-            #[cfg(not(target_os = "macos"))]
-            let focus_menu_items: Option<FocusTrayMenuItems> = None;
-            let menu_builder = MenuBuilder::new(app).text("show", "打开表盘");
-            #[cfg(target_os = "macos")]
-            let menu_builder = {
-                let items = focus_menu_items.as_ref().unwrap();
-                menu_builder
-                    .item(&items.start)
-                    .item(&items.pause)
-                    .item(&items.end)
-            };
-            let menu = menu_builder
+            let menu = MenuBuilder::new(app)
+                .text("show", "打开表盘")
                 .text("pause", "暂停/恢复监测")
                 .separator()
                 .quit()
                 .build()?;
-            let mut tray = TrayIconBuilder::with_id(ORBIT_TRAY_ID)
+            let mut tray = TrayIconBuilder::new()
                 .menu(&menu)
-                .tooltip("Orbit");
+                .tooltip("每日任务监测系统");
             if let Some(icon) = app.default_window_icon() {
                 tray = tray.icon(icon.clone());
             }
             tray.on_menu_event(|app, event| match event.id().as_ref() {
                 "show" => show_main_dashboard(app),
-                FOCUS_START_MENU_ID => start_focus_from_tray(app),
-                FOCUS_PAUSE_MENU_ID => toggle_focus_pause_from_tray(app),
-                FOCUS_END_MENU_ID => end_focus_from_tray(app),
                 "pause" => {
                     if let Some(state) = app.try_state::<DesktopState>() {
                         if let Ok(service) = state.service.lock() {
@@ -3731,12 +2655,6 @@ pub fn run() {
                 }
             })
             .build(app)?;
-            if let Some(state) = app.try_state::<DesktopState>()
-                && let Ok(mut stored_menu) = state.focus_tray_menu.lock()
-            {
-                *stored_menu = focus_menu_items;
-            }
-            start_focus_timer_worker(app.handle().clone());
 
             if let Some(window) = app.get_webview_window("main") {
                 let hidden_window = window.clone();
@@ -3758,7 +2676,6 @@ pub fn run() {
             get_workflow,
             get_knowledge_graph,
             get_settings,
-            list_system_fonts,
             list_ai_reviews,
             list_pending_ai_jobs,
             resolve_ai_review,
@@ -3768,13 +2685,6 @@ pub fn run() {
             update_settings,
             set_monitoring_state,
             save_manual_classification,
-            preview_manual_classification_rule,
-            get_sync_status,
-            export_sync_bundle,
-            import_sync_bundle,
-            import_calendar_context,
-            import_project_context,
-            get_external_context,
             queue_segment_classification,
             save_daily_goal,
             get_daily_goal,
@@ -3786,9 +2696,7 @@ pub fn run() {
             queue_trend_research_analysis,
             start_focus_session,
             complete_focus_session,
-            get_focus_timer_status,
             get_browser_sources,
-            get_collection_health,
             scan_browsers,
             list_ai_providers,
             save_custom_ai_provider,
@@ -3824,20 +2732,15 @@ pub fn run() {
             record_daily_actual_output_progress,
         ])
         .run(tauri::generate_context!())
-        .expect("failed to run Orbit");
+        .expect("failed to run Daily Task Monitor");
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "windows")]
 fn is_browser_app(app: &str) -> bool {
     let app = app.to_ascii_lowercase();
     [
         "chrome",
-        "google chrome",
         "msedge",
-        "microsoft edge",
-        "safari",
-        "arc",
-        "brave browser",
         "brave",
         "opera",
         "vivaldi",
@@ -3927,7 +2830,7 @@ pub(crate) fn current_ai_execution_snapshot(
     build_ai_execution_snapshot(&settings, &providers, evidence_hash, created_at_ms)
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "windows")]
 pub fn enqueue_segment_classification_job(
     database: &Database,
     segment: &ActivitySegmentRecord,
@@ -3957,7 +2860,7 @@ pub fn enqueue_segment_classification_job(
     )
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "windows")]
 pub fn enqueue_segment_classification_job_with_privacy(
     database: &Database,
     segment: &ActivitySegmentRecord,
@@ -3972,7 +2875,7 @@ pub fn enqueue_segment_classification_job_with_privacy(
         .map_err(|error| error.to_string())
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "windows")]
 fn enqueue_segment_for_ai(
     database: &Database,
     settings: &AppSettings,
@@ -3985,245 +2888,13 @@ fn enqueue_segment_for_ai(
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-const ACTIVITY_SAMPLE_HEARTBEAT_MS: i64 = 60_000;
-
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ActivitySampleFingerprint {
-    app: String,
-    app_path: String,
-    title: String,
-    idle: bool,
-    media_playing: bool,
-}
-
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-#[derive(Debug, Default)]
-struct ActivitySamplePersistenceState {
-    last_fingerprint: Option<ActivitySampleFingerprint>,
-    last_persisted_at_ms: Option<i64>,
-    pending_key_presses: u32,
-    pending_mouse_events: u32,
-}
-
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-impl ActivitySamplePersistenceState {
-    fn observe(
-        &mut self,
-        sample: &crate::monitor::MonitorSample,
-        idle: bool,
-    ) -> Option<(u32, u32)> {
-        self.pending_key_presses = self.pending_key_presses.saturating_add(sample.key_presses);
-        self.pending_mouse_events = self
-            .pending_mouse_events
-            .saturating_add(sample.mouse_events);
-        let fingerprint = ActivitySampleFingerprint {
-            app: sample.app.clone(),
-            app_path: sample.app_path.clone(),
-            title: sample.title.clone(),
-            idle,
-            media_playing: sample.media_playing,
-        };
-        let state_changed = self.last_fingerprint.as_ref() != Some(&fingerprint);
-        let heartbeat_due = self.last_persisted_at_ms.is_none_or(|last| {
-            sample.observed_at_ms.saturating_sub(last) >= ACTIVITY_SAMPLE_HEARTBEAT_MS
-        });
-        if !state_changed && !heartbeat_due {
-            return None;
-        }
-        self.last_fingerprint = Some(fingerprint);
-        self.last_persisted_at_ms = Some(sample.observed_at_ms);
-        let aggregate = (self.pending_key_presses, self.pending_mouse_events);
-        self.pending_key_presses = 0;
-        self.pending_mouse_events = 0;
-        Some(aggregate)
-    }
-
-    fn reset(&mut self) {
-        *self = Self::default();
-    }
-}
-
-#[cfg(all(test, any(target_os = "macos", target_os = "windows")))]
-mod activity_sample_persistence_tests {
-    use super::ActivitySamplePersistenceState;
-    use crate::monitor::MonitorSample;
-
-    fn sample(observed_at_ms: i64, title: &str, key_presses: u32) -> MonitorSample {
-        MonitorSample {
-            observed_at_ms,
-            last_input_at_ms: observed_at_ms,
-            app: "Code".into(),
-            app_path: "/Applications/Code.app".into(),
-            title: title.into(),
-            domain: String::new(),
-            key_presses,
-            mouse_events: 1,
-            media_playing: false,
-        }
-    }
-
-    #[test]
-    fn unchanged_samples_are_aggregated_until_state_change_or_heartbeat() {
-        let mut state = ActivitySamplePersistenceState::default();
-
-        assert_eq!(state.observe(&sample(0, "one", 1), false), Some((1, 1)));
-        assert_eq!(state.observe(&sample(5_000, "one", 2), false), None);
-        assert_eq!(
-            state.observe(&sample(10_000, "two", 3), false),
-            Some((5, 2)),
-            "a title change flushes all input accumulated since the previous persisted sample"
-        );
-        assert_eq!(state.observe(&sample(65_000, "two", 4), false), None);
-        assert_eq!(
-            state.observe(&sample(70_000, "two", 5), false),
-            Some((9, 2)),
-            "an unchanged state is persisted at least once per minute"
-        );
-    }
-
-    #[test]
-    fn idle_transition_and_reset_force_a_sample() {
-        let mut state = ActivitySamplePersistenceState::default();
-
-        assert!(state.observe(&sample(0, "one", 0), false).is_some());
-        assert!(state.observe(&sample(5_000, "one", 0), true).is_some());
-        state.reset();
-        assert!(state.observe(&sample(10_000, "one", 0), true).is_some());
-    }
-}
-
-fn load_or_create_browser_watcher_token(
-    database: &Database,
-) -> Result<String, Box<dyn std::error::Error>> {
-    const KEY: &str = "browser_watcher_token_v1";
-    if let Some(value) = database.get_setting_json(KEY)? {
-        if let Ok(token) = serde_json::from_str::<String>(&value) {
-            if token.len() >= 32 {
-                return Ok(token);
-            }
-        }
-    }
-    let entropy = format!(
-        "{}\n{}\n{}\n{:p}",
-        now_ms(),
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or_default(),
-        database
-    );
-    let token = format!("{:x}", Sha256::digest(entropy.as_bytes()));
-    database.set_setting_json(KEY, &serde_json::to_string(&token)?)?;
-    Ok(token)
-}
-
-fn start_browser_watcher(app: tauri::AppHandle) {
-    let Some(state) = app.try_state::<DesktopState>() else {
-        return;
-    };
-    let token = state.browser_watcher.token.clone();
-    drop(state);
-    let status_app = app.clone();
-    let heartbeat_app = app.clone();
-    std::thread::spawn(move || {
-        run_browser_watcher_server(
-            token,
-            move |ready, error| {
-                if let Some(state) = status_app.try_state::<DesktopState>() {
-                    if let Ok(mut runtime) = state.browser_watcher.runtime.lock() {
-                        runtime.listener_ready = ready;
-                        runtime.listener_error = error;
-                    }
-                }
-                let _ = status_app.emit(
-                    COLLECTION_HEALTH_CHANGED_EVENT,
-                    serde_json::json!({ "observedAtMs": now_ms() }),
-                );
-            },
-            move |heartbeat| process_browser_heartbeat(&heartbeat_app, heartbeat),
-        );
-    });
-}
-
-fn process_browser_heartbeat(
-    app: &tauri::AppHandle,
-    heartbeat: BrowserHeartbeat,
-) -> Result<(), String> {
-    let received_at_ms = now_ms();
-    let source_id = heartbeat.source_id.clone();
-    let active = heartbeat.active && !heartbeat.private;
-    let state = app
-        .try_state::<DesktopState>()
-        .ok_or("Application state is unavailable")?;
-    let settings = state
-        .service
-        .lock()
-        .map_err(|_| "Application service is unavailable")?
-        .get_settings()
-        .map_err(|error| error.to_string())?;
-    if !settings.monitoring_enabled {
-        let mut runtime = state
-            .browser_watcher
-            .runtime
-            .lock()
-            .map_err(|_| "Browser watcher state is unavailable")?;
-        runtime.engine = BrowserWatcherEngine::default();
-        runtime.connected_sources.clear();
-        return Ok(());
-    }
-    let slice = {
-        let mut runtime = state
-            .browser_watcher
-            .runtime
-            .lock()
-            .map_err(|_| "Browser watcher state is unavailable")?;
-        let slice = runtime
-            .engine
-            .ingest(heartbeat, received_at_ms, &settings.excluded_domains)?;
-        runtime.last_heartbeat_at_ms = Some(received_at_ms);
-        if active {
-            runtime
-                .connected_sources
-                .insert(source_id.clone(), received_at_ms);
-        } else {
-            runtime.connected_sources.remove(&source_id);
-        }
-        slice
-    };
-    if let Some(slice) = slice {
-        state
-            .service
-            .lock()
-            .map_err(|_| "Application service is unavailable")?
-            .database()
-            .insert_browser_activity_slice(&slice)
-            .map_err(|error| error.to_string())?;
-        if let Ok(mut runtime) = state.browser_watcher.runtime.lock() {
-            runtime.last_persisted_at_ms = Some(slice.ended_at_ms);
-        }
-    }
-    let _ = app.emit(
-        COLLECTION_HEALTH_CHANGED_EVENT,
-        serde_json::json!({ "observedAtMs": received_at_ms }),
-    );
-    Ok(())
-}
-
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "windows")]
 fn start_monitoring_worker(app: tauri::AppHandle) {
     std::thread::spawn(move || {
         const GAP_THRESHOLD_MS: i64 = 15_000;
-        const HISTORY_REPAIR_GAP_THRESHOLD_MS: i64 = ACTIVITY_SAMPLE_HEARTBEAT_MS + 15_000;
         const HISTORY_REPAIR_LOOKBACK_MS: i64 = 30 * 24 * 60 * 60 * 1_000;
-        const COLLECTOR_LEASE_TTL_MS: i64 = 20_000;
-        let collector_owner_id = format!("collector-{}-{}", std::process::id(), now_ms());
-        let mut collector_lease_valid_until_ms = 0_i64;
-        let mut collector = PlatformCollector::default();
+        let mut collector = WindowsCollector::default();
         let mut engine = MonitorEngine::new(6 * 60 * 1_000);
-        let mut sample_persistence = ActivitySamplePersistenceState::default();
         let mut was_monitoring = false;
         let mut historical_repair_checked = false;
         loop {
@@ -4232,68 +2903,9 @@ fn start_monitoring_worker(app: tauri::AppHandle) {
                 .and_then(|state| state.service.lock().ok()?.get_settings().ok())
                 .unwrap_or_default();
             if settings.monitoring_enabled {
-                let lease_now_ms = now_ms();
-                let owns_collector_lease = app
-                    .try_state::<DesktopState>()
-                    .and_then(|state| {
-                        let service = state.service.lock().ok()?;
-                        match service.database().try_acquire_collector_lease(
-                            &collector_owner_id,
-                            lease_now_ms,
-                            COLLECTOR_LEASE_TTL_MS,
-                        ) {
-                            Ok(true) => {
-                                collector_lease_valid_until_ms =
-                                    lease_now_ms.saturating_add(COLLECTOR_LEASE_TTL_MS);
-                                Some(true)
-                            }
-                            Ok(false) => Some(false),
-                            Err(_) => Some(collector_lease_valid_until_ms > lease_now_ms),
-                        }
-                    })
-                    .unwrap_or(false);
-                if !owns_collector_lease {
-                    if was_monitoring {
-                        let _ = engine.take_current();
-                        engine =
-                            MonitorEngine::new(settings.idle_threshold_minutes as i64 * 60_000);
-                        sample_persistence.reset();
-                    }
-                    was_monitoring = false;
-                    std::thread::sleep(std::time::Duration::from_secs(5));
-                    continue;
-                }
                 let idle_threshold_ms = settings.idle_threshold_minutes as i64 * 60_000;
                 engine.set_idle_threshold_ms(idle_threshold_ms);
                 let mut sample = collector.sample();
-                if sample.domain.is_empty() && is_browser_application(&sample.app) {
-                    let watcher_context = app.try_state::<DesktopState>().and_then(|state| {
-                        state
-                            .browser_watcher
-                            .runtime
-                            .lock()
-                            .ok()?
-                            .engine
-                            .current_context(sample.observed_at_ms)
-                    });
-                    if let Some(context) = watcher_context {
-                        sample.domain = context.domain;
-                        if sample.title.is_empty() {
-                            sample.title = context.title;
-                        }
-                    }
-                }
-                if let Some(state) = app.try_state::<DesktopState>() {
-                    if let Ok(mut runtime) = state.collection_runtime.lock() {
-                        runtime.last_idle_read_at_ms = Some(sample.observed_at_ms);
-                        if !sample.app.trim().is_empty() && sample.app != "Unknown" {
-                            runtime.last_app_available_at_ms = Some(sample.observed_at_ms);
-                        }
-                        if !sample.title.trim().is_empty() {
-                            runtime.last_title_available_at_ms = Some(sample.observed_at_ms);
-                        }
-                    }
-                }
                 let idle_seconds = sample
                     .observed_at_ms
                     .saturating_sub(sample.last_input_at_ms)
@@ -4316,7 +2928,7 @@ fn start_monitoring_worker(app: tauri::AppHandle) {
                                     .repair_recent_monitoring_gaps(
                                         sample.observed_at_ms,
                                         HISTORY_REPAIR_LOOKBACK_MS,
-                                        HISTORY_REPAIR_GAP_THRESHOLD_MS,
+                                        GAP_THRESHOLD_MS,
                                     )
                                     .and_then(|_| {
                                         database.set_setting_json(
@@ -4331,7 +2943,7 @@ fn start_monitoring_worker(app: tauri::AppHandle) {
                         }
                         let rules = database.list_manual_rules().unwrap_or_default();
                         engine.set_manual_rules(rules.clone());
-                        if sample.domain.is_empty() && is_browser_app(&sample.app) {
+                        if is_browser_app(&sample.app) {
                             if let Ok(Some((domain, _title))) = database.latest_browser_context(
                                 sample.observed_at_ms.saturating_sub(5 * 60_000),
                                 sample.observed_at_ms,
@@ -4353,9 +2965,6 @@ fn start_monitoring_worker(app: tauri::AppHandle) {
                                 GAP_THRESHOLD_MS,
                             )
                         }) {
-                            if let Ok(mut runtime) = state.collection_runtime.lock() {
-                                runtime.last_continuity_gap_at_ms = Some(sample.observed_at_ms);
-                            }
                             if let Some(previous) = engine.take_current() {
                                 persisted_segments.push(previous);
                             }
@@ -4373,23 +2982,18 @@ fn start_monitoring_worker(app: tauri::AppHandle) {
                             .collect::<Vec<_>>();
                         persisted_segments.extend(output.completed.iter().cloned());
                         persisted_segments.push(output.current.clone());
-                        let sample_aggregate = sample_persistence
-                            .observe(&sample, output.current.category == ActivityCategory::Idle);
-                        let sample_write = sample_aggregate.map(|(key_presses, mouse_events)| {
-                            ActivitySampleWrite {
+                        let persisted = database.record_monitoring_tick(
+                            &ActivitySampleWrite {
                                 id: sample_id,
                                 sampled_at_ms: sample.observed_at_ms,
                                 app: sample.app.clone(),
                                 app_path: sample.app_path.clone(),
                                 title: sample.title.clone(),
                                 idle_seconds,
-                                key_presses,
-                                mouse_events,
+                                key_presses: sample.key_presses,
+                                mouse_events: sample.mouse_events,
                                 media_playing: sample.media_playing,
-                            }
-                        });
-                        let persisted = database.record_monitoring_tick_with_optional_sample(
-                            sample_write.as_ref(),
+                            },
                             &persisted_segments,
                             &MonitoringContinuityCheckpoint {
                                 expected_tracking: true,
@@ -4400,15 +3004,6 @@ fn start_monitoring_worker(app: tauri::AppHandle) {
                             },
                         );
                         if persisted.is_ok() {
-                            if let Ok(mut runtime) = state.collection_runtime.lock() {
-                                runtime.last_persisted_at_ms = Some(sample.observed_at_ms);
-                            }
-                            let _ = app.emit(
-                                ACTIVITY_CHANGED_EVENT,
-                                serde_json::json!({
-                                    "observedAtMs": sample.observed_at_ms,
-                                }),
-                            );
                             for segment in output.completed {
                                 if background_ai_gate_enabled(
                                     &settings,
@@ -4425,6 +3020,23 @@ fn start_monitoring_worker(app: tauri::AppHandle) {
                                     );
                                 }
                             }
+                            if background_ai_gate_enabled(
+                                &settings,
+                                AiAutomationGate::Classification,
+                            ) && output.current.needs_review
+                                && !matches_app_exclusion(
+                                    &output.current.app,
+                                    &settings.excluded_apps,
+                                )
+                            {
+                                enqueue_segment_for_ai(
+                                    database,
+                                    &settings,
+                                    &providers,
+                                    &output.current,
+                                    sample.observed_at_ms,
+                                );
+                            }
                         }
                     }
                 }
@@ -4439,24 +3051,11 @@ fn start_monitoring_worker(app: tauri::AppHandle) {
                     updated_at_ms: observed_at_ms,
                 };
                 let segment = engine.take_current();
-                sample_persistence.reset();
                 if let Some(state) = app.try_state::<DesktopState>() {
                     if let Ok(service) = state.service.lock() {
-                        let persisted = service
-                            .database()
-                            .record_monitoring_pause(segment.as_ref(), &checkpoint);
-                        if persisted.is_ok() {
-                            let _ = app.emit(
-                                ACTIVITY_CHANGED_EVENT,
-                                serde_json::json!({
-                                    "observedAtMs": observed_at_ms,
-                                }),
-                            );
-                        }
                         let _ = service
                             .database()
-                            .release_collector_lease(&collector_owner_id);
-                        collector_lease_valid_until_ms = 0;
+                            .record_monitoring_pause(segment.as_ref(), &checkpoint);
                     }
                 }
             }
@@ -4466,7 +3065,7 @@ fn start_monitoring_worker(app: tauri::AppHandle) {
     });
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(not(target_os = "windows"))]
 fn start_monitoring_worker(_app: tauri::AppHandle) {}
 
 fn start_browser_worker(app: tauri::AppHandle) {
@@ -4497,13 +3096,6 @@ fn start_browser_worker(app: tauri::AppHandle) {
             } else {
                 None
             };
-            if scan.is_some() {
-                if let Some(state) = app.try_state::<DesktopState>() {
-                    if let Ok(mut runtime) = state.collection_runtime.lock() {
-                        runtime.last_browser_history_scan_at_ms = Some(end_ms);
-                    }
-                }
-            }
             if let (Some(runtime), Some(scan)) = (&runtime, scan) {
                 for (visit_id, url, domain, title) in scan.new_visits.into_iter().take(20) {
                     let monitoring_enabled = app
@@ -4605,13 +3197,8 @@ fn start_ai_worker(app: tauri::AppHandle) {
         };
         runtime.block_on(async move {
             loop {
-                let processed = process_one_ai_job(&app).await.unwrap_or(false);
-                tokio::time::sleep(std::time::Duration::from_secs(if processed {
-                    1
-                } else {
-                    20
-                }))
-                .await;
+                let _ = process_one_ai_job(&app).await;
+                tokio::time::sleep(std::time::Duration::from_secs(20)).await;
             }
         });
     });
@@ -4892,9 +3479,9 @@ async fn process_one_ai_job(app: &tauri::AppHandle) -> Result<bool, String> {
 
 async fn process_one_ai_job_with_manual_override(
     app: &tauri::AppHandle,
-    _manual_override: bool,
+    manual_override: bool,
 ) -> Result<bool, String> {
-    let (job, providers) = {
+    let (job, _settings, providers) = {
         let Some(state) = app.try_state::<DesktopState>() else {
             return Ok(false);
         };
@@ -4902,6 +3489,10 @@ async fn process_one_ai_job_with_manual_override(
             .service
             .lock()
             .map_err(|_| "Application state is unavailable")?;
+        let settings = service.get_settings().map_err(|error| error.to_string())?;
+        if !settings.ai_backfill_enabled && !manual_override {
+            return Ok(false);
+        }
         let Some(job) = service
             .database()
             .claim_next_due_ai_job(now_ms())
@@ -4911,6 +3502,7 @@ async fn process_one_ai_job_with_manual_override(
         };
         (
             job,
+            settings,
             provider_templates(Some(service.database()))
                 .into_iter()
                 .map(|mut provider| {
@@ -5897,33 +4489,13 @@ fn parse_daily_analysis_response(content: &str) -> Result<DailyAnalysisAiResult,
 }
 
 fn discover_browser_sources() -> Vec<BrowserSource> {
-    #[cfg(target_os = "windows")]
     let local_app_data = std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_default();
-    #[cfg(target_os = "windows")]
     let roots = [
         ("Chrome", local_app_data.join("Google/Chrome/User Data")),
         ("Edge", local_app_data.join("Microsoft/Edge/User Data")),
-        (
-            "Brave",
-            local_app_data.join("BraveSoftware/Brave-Browser/User Data"),
-        ),
     ];
-    #[cfg(target_os = "macos")]
-    let roots = UserDirs::new()
-        .map(|dirs| dirs.home_dir().join("Library/Application Support"))
-        .map(|support| {
-            [
-                ("Chrome", support.join("Google/Chrome")),
-                ("Edge", support.join("Microsoft Edge")),
-                ("Brave", support.join("BraveSoftware/Brave-Browser")),
-                ("Arc", support.join("Arc/User Data")),
-            ]
-        })
-        .unwrap_or_default();
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let roots: [(&str, PathBuf); 0] = [];
     let mut sources = Vec::new();
     for (browser, root) in roots {
         let profiles = fs::read_dir(&root)
@@ -6058,7 +4630,11 @@ fn now_ms() -> i64 {
 }
 
 fn app_data_dir() -> PathBuf {
-    platform_storage_root().join("data")
+    std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("data"))
+        .join(current_edition_identity().storage_name)
+        .join("data")
 }
 
 fn backup_database_before_1_3_migration(data_dir: &Path) -> std::io::Result<()> {
@@ -6080,30 +4656,16 @@ fn backup_database_before_1_3_migration(data_dir: &Path) -> std::io::Result<()> 
 }
 
 fn icon_cache_dir() -> PathBuf {
-    platform_storage_root().join("icon-cache")
-}
-
-fn platform_storage_root() -> PathBuf {
-    #[cfg(target_os = "windows")]
-    if let Some(path) = std::env::var_os("LOCALAPPDATA") {
-        return PathBuf::from(path).join(current_edition_identity().storage_name);
-    }
-    ProjectDirs::from(
-        "com",
-        "DailyTaskMonitor",
-        current_edition_identity().storage_name,
-    )
-    .map(|dirs| dirs.data_local_dir().to_path_buf())
-    .unwrap_or_else(|| PathBuf::from("data").join(current_edition_identity().storage_name))
+    std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("data"))
+        .join(current_edition_identity().storage_name)
+        .join("icon-cache")
 }
 
 #[cfg(test)]
 mod tray_interaction_tests {
-    use super::{
-        focus_pause_menu_label, focus_timer_status, focus_tray_title, format_focus_countdown,
-        is_dashboard_open_gesture, same_focus_runtime_state,
-    };
-    use crate::db::FocusSessionRecord;
+    use super::is_dashboard_open_gesture;
     use tauri::tray::MouseButton;
 
     #[test]
@@ -6112,57 +4674,6 @@ mod tray_interaction_tests {
         assert!(!is_dashboard_open_gesture(false, MouseButton::Left));
         assert!(!is_dashboard_open_gesture(true, MouseButton::Right));
         assert!(!is_dashboard_open_gesture(true, MouseButton::Middle));
-    }
-
-    #[test]
-    fn focus_countdown_uses_the_persisted_start_and_clamps_at_zero() {
-        let session = FocusSessionRecord {
-            id: "focus-1".into(),
-            goal_date: "2026-08-13".into(),
-            goal_text: "Ship timer".into(),
-            planned_minutes: 25,
-            started_at_ms: 1_000,
-            ended_at_ms: None,
-            outcome: String::new(),
-            task_id: Some("task-1".into()),
-            paused_at_ms: None,
-            paused_total_ms: 0,
-            notified_at_ms: None,
-        };
-
-        let running = focus_timer_status(session.clone(), 1_000);
-        assert_eq!(running.ends_at_ms, 1_501_000);
-        assert_eq!(running.remaining_seconds, 1_500);
-        assert_eq!(format_focus_countdown(running.remaining_seconds), "25:00");
-        assert!(!running.expired);
-        assert!(!running.paused);
-        assert_eq!(focus_pause_menu_label(Some(&running)), "暂停番茄钟");
-        assert_eq!(focus_tray_title(Some(&running)), "🍅 25:00");
-        let one_second_later = focus_timer_status(session.clone(), 2_000);
-        assert!(same_focus_runtime_state(
-            &Some(running.clone()),
-            &Some(one_second_later)
-        ));
-
-        let mut paused_session = session.clone();
-        paused_session.paused_at_ms = Some(61_000);
-        let paused = focus_timer_status(paused_session, 121_000);
-        assert_eq!(paused.remaining_seconds, 1_440);
-        assert!(paused.paused);
-        assert!(!same_focus_runtime_state(
-            &Some(running),
-            &Some(paused.clone())
-        ));
-        assert_eq!(focus_pause_menu_label(Some(&paused)), "继续番茄钟");
-        assert_eq!(focus_tray_title(Some(&paused)), "🍅 24:00 ⏸");
-
-        let expired = focus_timer_status(session, 1_501_001);
-        assert_eq!(expired.remaining_seconds, 0);
-        assert_eq!(format_focus_countdown(expired.remaining_seconds), "00:00");
-        assert!(expired.expired);
-        assert_eq!(focus_pause_menu_label(Some(&expired)), "暂停番茄钟");
-        assert_eq!(focus_pause_menu_label(None), "暂停番茄钟");
-        assert_eq!(focus_tray_title(None), "");
     }
 }
 

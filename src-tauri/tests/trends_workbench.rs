@@ -105,65 +105,6 @@ fn trend_workbench_reports_inactivity_reason_distribution() {
     );
 }
 
-#[test]
-fn trend_workbench_canonicalizes_overlapping_collectors_for_every_view() {
-    let database = Database::open_in_memory().unwrap();
-    for item in [
-        segment(
-            "idle-a",
-            "2026-07-12",
-            0,
-            4 * 3_600_000,
-            ActivityCategory::Idle,
-            1.0,
-        ),
-        segment(
-            "idle-b",
-            "2026-07-12",
-            0,
-            4 * 3_600_000,
-            ActivityCategory::Idle,
-            1.0,
-        ),
-        segment(
-            "active",
-            "2026-07-12",
-            3_600_000,
-            3_600_000,
-            ActivityCategory::Research,
-            1.0,
-        ),
-    ] {
-        database.insert_segment(&item).unwrap();
-    }
-
-    let payload = daily_task_monitor_core::trends::get_trend_workbench(
-        &database,
-        request(
-            "2026-07-12",
-            "2026-07-12",
-            Some(TrendGranularity::Day),
-            TrendMetric::MonitoredSeconds,
-        ),
-    )
-    .unwrap();
-
-    assert_eq!(payload.summary.totals.monitored_seconds, 4 * 3_600);
-    assert_eq!(payload.summary.totals.active_seconds, 3_600);
-    assert_eq!(payload.summary.totals.idle_seconds, 3 * 3_600);
-    assert_eq!(payload.buckets[0].values.monitored_seconds, 4 * 3_600);
-    assert_eq!(payload.activity_composition.all.total_seconds, 4 * 3_600);
-    assert_eq!(
-        payload.buckets[0]
-            .drilldown
-            .raw_rows
-            .iter()
-            .map(|row| row.clipped_duration_seconds)
-            .sum::<i64>(),
-        4 * 3_600
-    );
-}
-
 fn request(
     start_date: &str,
     end_date: &str,

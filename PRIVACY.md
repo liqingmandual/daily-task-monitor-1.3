@@ -1,6 +1,6 @@
 # 隐私说明
 
-Orbit 采用本地优先设计。监测、聚合、统计和数据库存储默认在本机完成。
+每日任务监测系统采用本地优先设计。监测、聚合、统计和数据库存储默认在本机完成。
 
 ## 本地记录
 
@@ -37,7 +37,7 @@ AI 请求只应包含当前分析需要的脱敏应用名、标题、域名、�
 
 ## 独立版数据位置
 
-Orbit 1.3 独立版默认使用：
+每日任务监测系统 1.3 独立版默认使用：
 
 ```text
 %LOCALAPPDATA%\DailyTaskMonitorIndependent13\data\monitor.db
@@ -49,7 +49,7 @@ Orbit 1.3 独立版默认使用：
 %LOCALAPPDATA%\DailyTaskMonitorIndependent13\icon-cache
 ```
 
-该位置与 TimeWheel 和 Orbit 其他版本分离。
+该位置与 TimeWheel 和每日任务监测系统其他版本分离。
 
 ## 用户控制
 

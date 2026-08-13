@@ -6,9 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "build:extensions": "node scripts/build-browser-extensions.mjs",
     "test": "vitest run",
-    "tauri": "node scripts/run-tauri.mjs",
+    "tauri": "tauri",
     "tauri:build:independent-1.3": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-independent-1.3.ps1"
   },
   "dependencies": {

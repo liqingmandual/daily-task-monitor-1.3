@@ -431,36 +431,23 @@ fn unavailable_versioned_codex_jobs_are_quarantined_without_touching_current_job
 #[test]
 fn stable_subject_key_deduplicates_a_growing_live_segment() {
     let db = Database::open_in_memory().unwrap();
-    let initial = snapshot(
-        AiExecutionMode::ApiKey,
-        "openai",
-        "gpt-4.1-mini",
-        "evidence-5s",
-        1_000,
-    );
+    let execution = snapshot(AiExecutionMode::ApiKey, "openai", "gpt-4.1-mini", "", 1_000);
     let first = db
         .enqueue_ai_job_for_subject(
             "classify_segment",
             "segment-42",
             r#"{"id":"segment-42","endedAtMs":5000}"#,
             1_000,
-            &initial,
+            &execution,
         )
         .unwrap();
-    let updated = snapshot(
-        AiExecutionMode::ApiKey,
-        "openai",
-        "gpt-4.1-mini",
-        "evidence-10s",
-        2_000,
-    );
     let second = db
         .enqueue_ai_job_for_subject(
             "classify_segment",
             "segment-42",
             r#"{"id":"segment-42","endedAtMs":10000}"#,
             2_000,
-            &updated,
+            &execution,
         )
         .unwrap();
 
@@ -473,53 +460,6 @@ fn stable_subject_key_deduplicates_a_growing_live_segment() {
             .payload_json
             .contains("10000")
     );
-    assert_eq!(
-        db.get_ai_job(&first).unwrap().unwrap().execution,
-        updated,
-        "the pending job must carry the newest evidence snapshot"
-    );
-}
-
-#[test]
-fn v16_migration_discards_only_unattempted_regenerable_ai_backlog() {
-    let path = queue_test_path("v16-ai-backlog-cleanup");
-    let db = Database::open(&path).unwrap();
-    let execution = snapshot(AiExecutionMode::ApiKey, "openai", "gpt-test", "hash", 1_000);
-    let derived = db
-        .enqueue_ai_job_for_subject("classify_segment", "segment-stale", "{}", 1_000, &execution)
-        .unwrap();
-    let completed = db
-        .enqueue_ai_job_for_subject("classify_page", "visit-complete", "{}", 2_000, &execution)
-        .unwrap();
-    let custom = db
-        .enqueue_ai_job_for_subject("custom_job", "custom", "{}", 3_000, &execution)
-        .unwrap();
-    drop(db);
-
-    let connection = rusqlite::Connection::open(&path).unwrap();
-    connection
-        .execute(
-            "UPDATE ai_jobs SET status='complete' WHERE id=?1",
-            [&completed],
-        )
-        .unwrap();
-    connection
-        .execute_batch("PRAGMA user_version = 15;")
-        .unwrap();
-    drop(connection);
-
-    let upgraded = Database::open(&path).unwrap();
-    assert!(upgraded.get_ai_job(&derived).unwrap().is_none());
-    assert_eq!(
-        upgraded.get_ai_job(&completed).unwrap().unwrap().status,
-        AiJobStatus::Complete
-    );
-    assert_eq!(
-        upgraded.get_ai_job(&custom).unwrap().unwrap().status,
-        AiJobStatus::Pending
-    );
-    drop(upgraded);
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]

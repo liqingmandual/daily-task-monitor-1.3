@@ -9,7 +9,7 @@ import type { TrendBucket } from "../../lib/desktop";
 const init = vi.fn();
 vi.mock("echarts", () => ({ init }));
 
-import { buildTrendChartPoints, TrendStackedTimeChart } from "./TrendDashboardCharts";
+import { TrendStackedTimeChart } from "./TrendDashboardCharts";
 
 const values = {
   monitoredSeconds: 7_200,
@@ -120,42 +120,5 @@ describe("TrendStackedTimeChart activity scope", () => {
     expect(series[0].name).toBe(activityDisplayRegistry.find((item) => item.key === "idle")!.label);
     expect(series[0].data[0].value).toBe(0.5);
     await act(async () => root.unmount());
-  });
-
-  it("falls back to authoritative active and idle totals when category slices are absent", async () => {
-    const { root, chart } = mount();
-    const withoutSlices = bucket();
-    withoutSlices.drilldown.categoryDistribution = [];
-    await act(async () => {
-      root.render(<TrendStackedTimeChart buckets={[withoutSlices]} activityScope="all" selectedBucketId={null} formatDuration={(seconds) => `${seconds}s`} onSelectBucket={vi.fn()} />);
-      await Promise.resolve();
-    });
-
-    const series = chart.setOption.mock.calls[0][0].series;
-    expect(series.map((item: { name: string }) => item.name)).toEqual(["活跃", "不活跃"]);
-    expect(series.map((item: { data: Array<{ value: number }> }) => item.data[0].value)).toEqual([1.5, 0.5]);
-    await act(async () => root.unmount());
-  });
-});
-
-describe("buildTrendChartPoints", () => {
-  it("pads a short daily history at the beginning to seven calendar days", () => {
-    const first = { ...bucket(), id: "day-12", startDate: "2026-08-12", endDate: "2026-08-12", values: { ...values, activeSeconds: 3_600 } };
-    const second = { ...bucket(), id: "day-13", startDate: "2026-08-13", endDate: "2026-08-13", values: { ...values, activeSeconds: 7_200 } };
-    const points = buildTrendChartPoints([first, second], "2026-08-12", "2026-08-13", "day");
-
-    expect(points).toHaveLength(7);
-    expect(points.map((point) => point.date)).toEqual([
-      "2026-08-07", "2026-08-08", "2026-08-09", "2026-08-10",
-      "2026-08-11", "2026-08-12", "2026-08-13",
-    ]);
-    expect(points.map((point) => point.activeSeconds)).toEqual([0, 0, 0, 0, 0, 3_600, 7_200]);
-  });
-
-  it("preserves non-daily buckets without inserting artificial ranges", () => {
-    const weekly = { ...bucket(), startDate: "2026-08-10", endDate: "2026-08-13", values: { ...values, activeSeconds: 3_600 } };
-    const points = buildTrendChartPoints([weekly], "2026-08-10", "2026-08-13", "week");
-    expect(points).toHaveLength(1);
-    expect(points[0]).toMatchObject({ label: "2026-08-10~2026-08-13", activeSeconds: 3_600 });
   });
 });

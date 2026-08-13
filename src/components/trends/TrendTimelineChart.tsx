@@ -39,28 +39,14 @@ export function TrendTimelineChart({ buckets, metric, selectedBucketId, formatDu
     let cleanup: (() => void) | undefined;
     void import("echarts").then((echarts) => {
       if (disposed) return;
-      const themeStyles = element.ownerDocument.defaultView!.getComputedStyle(element.closest(".app-frame") ?? element);
-      const themeValue = (name: string, fallback: string) => (
-        typeof themeStyles.getPropertyValue === "function"
-          ? themeStyles.getPropertyValue(name).trim() || fallback
-          : fallback
-      );
-      const primary = themeValue("--primary", "#365f52");
-      const secondary = themeValue("--other-active", primary);
-      const text = themeValue("--text", "#24251f");
-      const muted = themeValue("--muted", "#77786e");
-      const border = themeValue("--border", "rgba(75, 76, 64, .14)");
-      const surface = themeValue("--surface", "#faf9f5");
-      const yAxis = chartYAxis(metric);
       const chart = echarts.init(element);
       chart.setOption({
       animationDuration: 220,
-      textStyle: { color: text },
       grid: { left: 54, right: 18, top: 24, bottom: 52 },
-      tooltip: { trigger: "axis", backgroundColor: surface, borderColor: border, textStyle: { color: text }, formatter: (params: Array<{ dataIndex: number }>) => { const bucket = buckets[params[0].dataIndex]; return `<b>${bucket.startDate}${bucket.startDate === bucket.endDate ? "" : ` 至 ${bucket.endDate}`}</b><br/>${metricLabels[metric]}：${displayValue(valueFor(bucket, metric), metric, formatDuration)}<br/>有效 ${bucket.recordedDayCount} 天 · 缺失 ${bucket.missingDayCount} 天`; } },
-      xAxis: { type: "category", data: buckets.map((bucket) => bucket.startDate === bucket.endDate ? bucket.startDate.slice(5) : `${bucket.startDate.slice(5)}~${bucket.endDate.slice(5)}`), axisLine: { lineStyle: { color: border } }, axisTick: { lineStyle: { color: border } }, axisLabel: { color: muted, hideOverlap: true } },
-      yAxis: { ...yAxis, axisLabel: { ...yAxis.axisLabel, color: muted }, splitLine: { lineStyle: { color: border } } },
-      series: [{ type: "bar", barMaxWidth: 34, data: buckets.map((bucket, index) => ({ value: chartValue(valueFor(bucket, metric), metric), itemStyle: { color: index === selectedIndex ? primary : secondary, borderColor: index === selectedIndex ? text : "transparent", borderWidth: index === selectedIndex ? 1 : 0, borderRadius: [4, 4, 1, 1] } })) }],
+      tooltip: { trigger: "axis", formatter: (params: Array<{ dataIndex: number }>) => { const bucket = buckets[params[0].dataIndex]; return `<b>${bucket.startDate}${bucket.startDate === bucket.endDate ? "" : ` 至 ${bucket.endDate}`}</b><br/>${metricLabels[metric]}：${displayValue(valueFor(bucket, metric), metric, formatDuration)}<br/>有效 ${bucket.recordedDayCount} 天 · 缺失 ${bucket.missingDayCount} 天`; } },
+      xAxis: { type: "category", data: buckets.map((bucket) => bucket.startDate === bucket.endDate ? bucket.startDate.slice(5) : `${bucket.startDate.slice(5)}~${bucket.endDate.slice(5)}`), axisLabel: { hideOverlap: true } },
+      yAxis: chartYAxis(metric),
+      series: [{ type: "bar", barMaxWidth: 34, data: buckets.map((bucket, index) => ({ value: chartValue(valueFor(bucket, metric), metric), itemStyle: { color: index === selectedIndex ? "#153f9f" : "#3164c8", borderColor: index === selectedIndex ? "#0f2f7d" : "transparent", borderWidth: index === selectedIndex ? 2 : 0, borderRadius: [3, 3, 0, 0] } })) }],
       });
       chart.on("click", (event: { dataIndex?: number }) => { if (typeof event.dataIndex === "number") onSelectBucket(buckets[event.dataIndex].id); });
       const resize = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => chart.resize());

@@ -20,7 +20,6 @@ use crate::domain::{
     TrendDataQuality, TrendDay, TrendPayload, TrendRange, TrendSummary, VideoPurpose,
 };
 use crate::knowledge_graph::{KnowledgeGraphFilters, KnowledgeGraphPayload, build_knowledge_graph};
-use crate::segment_overlap::canonicalize_activity_segments;
 use crate::trend_analysis::{
     TrendResearchAnalysis, TrendResearchJobPayload, build_trend_research_input,
     build_trend_research_job_payload_scoped, limitations_only_analysis, unavailable_analysis,
@@ -70,19 +69,6 @@ pub struct DailyAnalysisEvidence {
 pub struct DailyAnalysisApp {
     pub name: String,
     pub seconds: i64,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ClassificationRulePreview {
-    pub segment_id: String,
-    pub matcher_kind: String,
-    pub app: String,
-    pub title: String,
-    pub category: ActivityCategory,
-    pub video_purpose: VideoPurpose,
-    pub historical_match_count: i64,
-    pub applies_to_future_matches_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -198,8 +184,6 @@ pub struct AppSettings {
     pub excluded_domains: Vec<String>,
     #[serde(default)]
     pub ui_theme: UiTheme,
-    #[serde(default = "default_ui_font")]
-    pub ui_font: String,
     #[serde(default)]
     pub experimental_knowledge_graph_enabled: bool,
 }
@@ -207,7 +191,6 @@ pub struct AppSettings {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum UiTheme {
-    MossNocturne,
     ClassicWorkbench,
     MoonGlass,
     SoftPaper,
@@ -228,7 +211,6 @@ impl<'de> Deserialize<'de> for UiTheme {
     {
         Ok(
             match serde_json::Value::deserialize(deserializer)?.as_str() {
-                Some("moss-nocturne") => Self::MossNocturne,
                 Some("moon-glass") => Self::MoonGlass,
                 Some("soft-paper" | "studio-blocks") => Self::SoftPaper,
                 Some("blueprint-data" | "signal-console") => Self::BlueprintData,
@@ -250,28 +232,6 @@ fn default_true() -> bool {
 
 fn default_codex_executable() -> String {
     "codex".to_string()
-}
-
-fn default_ui_font() -> String {
-    "Ubuntu".to_string()
-}
-
-fn normalize_ui_font(value: &str) -> String {
-    let value = value.trim();
-    let lowercase = value.to_lowercase();
-    [".ttf", ".tff", ".otf", ".ttc", ".dfont"]
-        .iter()
-        .find(|extension| lowercase.ends_with(*extension))
-        .map(|extension| value[..value.len() - extension.len()].trim().to_string())
-        .unwrap_or_else(|| value.to_string())
-}
-
-fn is_valid_ui_font(value: &str) -> bool {
-    let value = value.trim();
-    !value.is_empty()
-        && !value.starts_with('.')
-        && value.len() <= 120
-        && !value.chars().any(char::is_control)
 }
 
 fn deserialize_optional_nullable_string<'de, D>(
@@ -322,10 +282,6 @@ impl AppSettings {
             .filter(|provider_id| !provider_id.is_empty());
         self.codex_executable = normalize_codex_executable(self.codex_executable);
         self.codex_model = normalize_codex_model(self.codex_model);
-        self.ui_font = normalize_ui_font(&self.ui_font);
-        if !is_valid_ui_font(&self.ui_font) {
-            self.ui_font = default_ui_font();
-        }
         self
     }
 }
@@ -347,7 +303,6 @@ impl Default for AppSettings {
             excluded_apps: Vec::new(),
             excluded_domains: Vec::new(),
             ui_theme: UiTheme::default(),
-            ui_font: default_ui_font(),
             experimental_knowledge_graph_enabled: false,
         }
     }
@@ -375,7 +330,6 @@ pub struct SettingsPatch {
     pub excluded_apps: Option<Vec<String>>,
     pub excluded_domains: Option<Vec<String>>,
     pub ui_theme: Option<UiTheme>,
-    pub ui_font: Option<String>,
     pub experimental_knowledge_graph_enabled: Option<bool>,
 }
 
@@ -390,6 +344,7 @@ impl AppService {
 
     pub fn get_dashboard(&self, start_ms: i64, end_ms: i64) -> Result<DashboardSnapshot> {
         let timeline = self.database.list_segments(start_ms, end_ms)?;
+        let clipped_segments = self.database.list_clipped_segments(start_ms, end_ms)?;
         let work_ledger_facts = self
             .database
             .load_work_ledger_range_facts(start_ms, end_ms)?;
@@ -398,21 +353,20 @@ impl AppService {
             .iter()
             .map(|fact| fact.segment.id.as_str())
             .collect::<BTreeSet<_>>();
-        let activity_composition = build_activity_compositions(non_overlapping_activity_slices(
-            &timeline,
-            &linked_activity_ids,
-            start_ms,
-            end_ms,
-        ));
-        let work_ledger = self.database.work_ledger_range_rollup_from_facts(
-            start_ms,
-            end_ms,
-            &work_ledger_facts,
-        )?;
+        let activity_composition =
+            build_activity_compositions(clipped_segments.iter().map(|segment| {
+                ActivityCompositionSlice {
+                    scope_key: segment.id.clone(),
+                    category: segment.category,
+                    video_purpose: segment.video_purpose,
+                    seconds: segment.ended_at_ms.saturating_sub(segment.started_at_ms) / 1_000,
+                    workflow_linked: linked_activity_ids.contains(segment.id.as_str()),
+                }
+            }));
         Ok(DashboardSnapshot {
             totals: self.database.dashboard_totals(start_ms, end_ms)?,
             timeline,
-            work_ledger,
+            work_ledger: self.database.work_ledger_range_rollup(start_ms, end_ms)?,
             activity_composition,
         })
     }
@@ -578,23 +532,24 @@ impl AppService {
         activity_scope: ActivityScope,
     ) -> Result<Vec<ActivitySegmentRecord>> {
         let mut segments = self.database.list_clipped_segments(start_ms, end_ms)?;
-        if activity_scope == ActivityScope::Meaningful {
-            let linked_activity_ids = self
-                .database
-                .load_work_ledger_range_facts(start_ms, end_ms)?
-                .activities
-                .into_iter()
-                .map(|fact| fact.segment.id)
-                .collect::<BTreeSet<_>>();
-            segments.retain(|segment| {
-                activity_is_meaningful(
-                    segment.category,
-                    segment.video_purpose,
-                    linked_activity_ids.contains(&segment.id),
-                )
-            });
+        if activity_scope == ActivityScope::All {
+            return Ok(segments);
         }
-        Ok(canonicalize_activity_segments(&segments, start_ms, end_ms))
+        let linked_activity_ids = self
+            .database
+            .load_work_ledger_range_facts(start_ms, end_ms)?
+            .activities
+            .into_iter()
+            .map(|fact| fact.segment.id)
+            .collect::<BTreeSet<_>>();
+        segments.retain(|segment| {
+            activity_is_meaningful(
+                segment.category,
+                segment.video_purpose,
+                linked_activity_ids.contains(&segment.id),
+            )
+        });
+        Ok(segments)
     }
 
     pub fn get_trend_workbench(
@@ -825,14 +780,6 @@ impl AppService {
         if let Some(value) = patch.ui_theme {
             settings.ui_theme = value;
         }
-        if let Some(value) = patch.ui_font {
-            let value = normalize_ui_font(&value);
-            settings.ui_font = if !is_valid_ui_font(&value) {
-                "Ubuntu".to_string()
-            } else {
-                value
-            };
-        }
         if let Some(value) = patch.experimental_knowledge_graph_enabled {
             settings.experimental_knowledge_graph_enabled = value;
         }
@@ -847,7 +794,6 @@ impl AppService {
         category: ActivityCategory,
         video_purpose: VideoPurpose,
         reason: &str,
-        create_future_rule: bool,
     ) -> Result<bool> {
         let changed = self.database.save_manual_classification(
             segment_id,
@@ -856,60 +802,18 @@ impl AppService {
             reason,
         )?;
         if changed {
-            let observed_at_ms = std::time::SystemTime::now()
+            let now_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis() as i64;
-            if create_future_rule {
-                self.database.save_manual_rule_for_segment(
-                    segment_id,
-                    category,
-                    video_purpose,
-                    observed_at_ms,
-                )?;
-            }
-            let payload = serde_json::json!({
-                "category": category,
-                "videoPurpose": if category == ActivityCategory::VideoInput {
-                    video_purpose
-                } else {
-                    VideoPurpose::Unknown
-                },
-                "reason": reason,
-                "createFutureRule": create_future_rule,
-            });
-            self.database.append_local_sync_event(
-                observed_at_ms,
-                "classification_correction",
+            self.database.save_manual_rule_for_segment(
                 segment_id,
-                "apply",
-                &payload.to_string(),
+                category,
+                video_purpose,
+                now_ms,
             )?;
         }
         Ok(changed)
-    }
-
-    pub fn preview_manual_classification_rule(
-        &self,
-        segment_id: &str,
-        category: ActivityCategory,
-        video_purpose: VideoPurpose,
-    ) -> Result<Option<ClassificationRulePreview>> {
-        Ok(self
-            .database
-            .classification_rule_context_for_segment(segment_id)?
-            .map(
-                |(app, title, historical_match_count)| ClassificationRulePreview {
-                    segment_id: segment_id.to_string(),
-                    matcher_kind: "app_title".to_string(),
-                    app,
-                    title,
-                    category,
-                    video_purpose,
-                    historical_match_count,
-                    applies_to_future_matches_only: true,
-                },
-            ))
     }
 
     pub fn database(&self) -> &Database {
@@ -1339,7 +1243,12 @@ impl AppService {
         self.database
             .enqueue_ai_job_for_subject(
                 "daily_analysis",
-                &format!("{}:{}", date, activity_scope_key(activity_scope)),
+                &format!(
+                    "{}:{}:{}",
+                    date,
+                    activity_scope_key(activity_scope),
+                    evidence.evidence_hash
+                ),
                 &payload,
                 now_ms,
                 &execution,
@@ -1497,7 +1406,7 @@ impl AppService {
         } else {
             BTreeSet::new()
         };
-        let filtered_segments: Vec<_> = all_segments
+        let segments: Vec<_> = all_segments
             .into_iter()
             .filter(|segment| {
                 activity_scope == ActivityScope::All
@@ -1508,7 +1417,6 @@ impl AppService {
                     )
             })
             .collect();
-        let segments = canonicalize_activity_segments(&filtered_segments, start_ms, end_ms);
         let totals = if activity_scope == ActivityScope::All {
             self.database.dashboard_totals(start_ms, end_ms)?
         } else {
@@ -1588,27 +1496,6 @@ impl AppService {
         evidence.evidence_hash = format!("{:x}", Sha256::digest(canonical));
         Ok(evidence)
     }
-}
-
-fn non_overlapping_activity_slices(
-    timeline: &[ActivitySegmentRecord],
-    linked_activity_ids: &BTreeSet<&str>,
-    start_ms: i64,
-    end_ms: i64,
-) -> Vec<ActivityCompositionSlice> {
-    canonicalize_activity_segments(timeline, start_ms, end_ms)
-        .into_iter()
-        .map(|segment| ActivityCompositionSlice {
-            scope_key: format!(
-                "{}:{}:{}",
-                segment.id, segment.started_at_ms, segment.ended_at_ms
-            ),
-            category: segment.category,
-            video_purpose: segment.video_purpose,
-            seconds: segment.ended_at_ms.saturating_sub(segment.started_at_ms) / 1_000,
-            workflow_linked: linked_activity_ids.contains(segment.id.as_str()),
-        })
-        .collect()
 }
 
 #[derive(Serialize)]

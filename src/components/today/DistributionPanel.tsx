@@ -10,9 +10,6 @@ import type { TimelineFilter } from "../../lib/timeline-filter";
 import { formatChartDuration } from "../../lib/presentation";
 import { DonutChart, type DonutSelection, formatPreview, PanelHeading } from "./analysis-shared";
 
-const BREAKDOWN_LIMIT = 5;
-const OTHER_ACTIVITY_KEY = "__other_activity__";
-
 export function DistributionPanel({
   activityCompositions,
   activityScope,
@@ -29,18 +26,10 @@ export function DistributionPanel({
   const [preview, setPreview] = useState<DonutSelection | null>(null);
   const composition = activityCompositions[activityScope];
   useEffect(() => setPreview(null), [activityScope, composition, previewResetKey]);
-  const rankedItems = useMemo(
+  const donutItems = useMemo(
     () => compositionToDonutItems(composition),
     [composition],
   );
-  const visibleItems = rankedItems.slice(0, BREAKDOWN_LIMIT);
-  const donutItems = useMemo(() => {
-    const remaining = rankedItems.slice(BREAKDOWN_LIMIT);
-    const otherValue = remaining.reduce((total, item) => total + item.value, 0);
-    return otherValue > 0
-      ? [...visibleItems, { key: OTHER_ACTIVITY_KEY, name: "其他活动", value: otherValue, color: "#a8a29e" }]
-      : visibleItems;
-  }, [rankedItems, visibleItems]);
 
   const drill = (key: ActivityDisplayKey) => {
     onDrill({ mode: "displayCategory", key });
@@ -62,12 +51,10 @@ export function DistributionPanel({
           centerValue={formatChartDuration(composition.totalSeconds)}
           items={donutItems}
           onPreview={setPreview}
-          onSelect={(item) => {
-            if (item.key !== OTHER_ACTIVITY_KEY) drill(item.key as ActivityDisplayKey);
-          }}
+          onSelect={(item) => drill(item.key as ActivityDisplayKey)}
         />
         <div className="category-list">
-          {visibleItems.map((donutItem) => {
+          {donutItems.map((donutItem) => {
             return <button
               className="bar-item"
               key={donutItem.key}

@@ -44,19 +44,6 @@ describe("buildDashboardMetrics", () => {
     expect(metrics.learningSeconds).toBe(2 * 3_600);
   });
 
-  it("does not double count overlapping collector segments", () => {
-    const metrics = buildDashboardMetrics([
-      segment(0, 4, "idle", "Idle A"),
-      segment(0, 4, "idle", "Idle B"),
-      segment(1, 2, "research", "Chrome"),
-    ]);
-
-    expect(metrics.monitoredSeconds).toBe(4 * 3_600);
-    expect(metrics.idleSeconds).toBe(3 * 3_600);
-    expect(metrics.activeSeconds).toBe(3_600);
-    expect(metrics.learningSeconds).toBe(3_600);
-  });
-
   it("splits segments across the four six-hour periods", () => {
     const metrics = buildDashboardMetrics([
       segment(5, 7, "creation_development", "Codex"),

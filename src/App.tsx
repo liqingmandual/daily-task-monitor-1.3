@@ -2,20 +2,18 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import {
   Activity,
   Bot,
-  CalendarDays,
   ChevronRight,
   CircleCheck,
   CircleX,
-  ClipboardCheck,
   FileText,
-  ListChecks,
+  Focus,
+  Gauge,
   Network,
   RefreshCw,
   Settings,
   ShieldAlert,
   ShieldCheck,
   Sparkles,
-  ChartNoAxesCombined,
   Timer,
   TriangleAlert,
   X,
@@ -34,11 +32,10 @@ import {
 import type { TimelineFilter } from "./lib/timeline-filter";
 import { appIdentityKey, fallbackAppIdentity, type AppIdentity } from "./lib/app-identity";
 import { TodayAnalysisPanels } from "./components/today/TodayAnalysisPanels";
-import { CompactFocusControl } from "./components/today/CompactFocusControl";
+import { CompactFocusPopover } from "./components/today/CompactFocusPopover";
 import { DailyGoalPanel } from "./components/today/DailyGoalPanel";
 import { DailyMarkdownExportButton } from "./components/today/DailyMarkdownExportButton";
 import { AiAnalysisPanel } from "./components/today/AiAnalysisPanel";
-import { ExternalContextPanel } from "./components/today/ExternalContextPanel";
 import { TrendsView } from "./components/trends/TrendsView";
 import { WorkflowPage } from "./components/workflow/WorkflowPage";
 import { AiReviewPage, previewAiReviewRecords } from "./components/ai-review/AiReviewPage";
@@ -52,7 +49,6 @@ import { buildAiReviewFilter, defaultAiReviewFilters, pendingReviewSubjectIds } 
 import {
   ACTIVITY_SCOPE_STORAGE_KEYS,
   buildFallbackActivityCompositions,
-  displayMetaForActivity,
   getCompositionLearningSeconds,
   parsePersistedActivityScope,
   type ActivityCompositions,
@@ -64,32 +60,18 @@ import {
   dayBounds,
   exportDailyReport,
   finishFocus,
-  exportSyncBundle,
   getAiConnectionHealth,
   getAppSettings,
-  getCollectionHealth,
   getCodexHealth,
-  getFocusTimerStatus,
-  getSyncStatus,
-  previewClassificationRule,
   importLegacyActivity,
-  importCalendarContext,
-  importProjectContext,
-  importSyncBundle,
   isDesktopRuntime,
   listAiProviders,
   listAiReviews,
   listBrowserSources,
-  listSystemFonts,
-  listenActivityChanged,
   listenAiConnectionHealthChanged,
-  listenCollectionHealthChanged,
-  listenOpenSettings,
   listenDailyAnalysisChanged,
-  listenFocusTimerChanged,
   listenWorkflowChanged,
   loadDashboardSnapshot,
-  loadExternalContext,
   loadDailyAnalysis,
   enqueueDailyAnalysis,
   revealDataFolder,
@@ -109,15 +91,8 @@ import {
   type BrowserSource,
   type CodexHealth,
   type CodexHealthStatus,
-  type CollectionChannelHealth,
-  type CollectionHealth,
-  type ClassificationRulePreview,
   type DailyGoalRecord,
-  type FocusTimerStatus,
-  type ExternalContextItem,
   type ScopedDailyAnalysisResult,
-  type SyncStatus,
-  type UiFont,
   type UiTheme,
   type WorkLedgerEvidence,
   type WorkLedgerRangeRollup,
@@ -129,24 +104,14 @@ import {
   updateMonitoring,
   updatePrivacyExclusions,
   updateKnowledgeGraphExperiment,
-  updateUiFont,
   updateUiTheme,
-  usesNativeMacSettingsMenu,
 } from "./lib/desktop";
 import type { KnowledgeGraphNode } from "./lib/desktop";
 
 const KnowledgeGraphPage = lazy(() => import("./KnowledgeGraphPage"));
 
-type Tab = "today" | "trends" | "workflow" | "ai-review" | "health";
+type Tab = "today" | "trends" | "workflow" | "ai-review";
 type HeaderLayout = "mobile" | "compact" | "wide";
-
-const tabOptions: Array<{ id: Tab; label: string; icon: typeof CalendarDays }> = [
-  { id: "today", label: "今日", icon: CalendarDays },
-  { id: "trends", label: "趋势", icon: ChartNoAxesCombined },
-  { id: "workflow", label: "工作流", icon: ListChecks },
-  { id: "ai-review", label: "AI 审核", icon: ClipboardCheck },
-  { id: "health", label: "健康诊断", icon: Activity },
-];
 
 function resolveHeaderLayout(viewportWidth: number): HeaderLayout {
   if (viewportWidth <= 760) return "mobile";
@@ -155,34 +120,12 @@ function resolveHeaderLayout(viewportWidth: number): HeaderLayout {
 }
 
 const themeOptions: Array<{ id: UiTheme; name: string; note: string }> = [
-  { id: "moss-nocturne", name: "日光轨道", note: "奶油日光、琥珀与清爽鼠尾草" },
   { id: "classic-workbench", name: "经典工作台", note: "清晰、克制，接近旧版体验" },
   { id: "moon-glass", name: "月白玻璃", note: "冰蓝玻璃与柔和高光" },
   { id: "soft-paper", name: "柔彩纸张", note: "低饱和色块与编辑式层级" },
   { id: "blueprint-data", name: "清透蓝图", note: "精细技术线条与数据动效" },
   { id: "knowledge-space", name: "知识空间", note: "深色关系控制台与高密度图谱" },
 ];
-
-function normalizeStoredFont(value: string | null): UiFont {
-  const normalized = value ? normalizeFontFamilyName(value) : "";
-  return normalized && isUsableFontFamily(normalized) ? normalized : "Ubuntu";
-}
-
-function normalizeFontFamilyName(value: string): string {
-  return value.trim().replace(/\.(?:ttf|tff|otf|ttc|dfont)$/i, "").trim();
-}
-
-function isUsableFontFamily(value: string): boolean {
-  const normalized = value.trim();
-  return normalized.length > 0
-    && normalized.length <= 120
-    && !normalized.startsWith(".")
-    && !/[\u0000-\u001f\u007f]/.test(normalized);
-}
-
-function cssFontFamily(value: string): string {
-  return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
-}
 
 function normalizeStoredTheme(value: string | null): UiTheme {
   const legacyMap: Record<string, UiTheme> = {
@@ -197,7 +140,7 @@ function normalizeStoredTheme(value: string | null): UiTheme {
 
 const sampleSegments: Segment[] = [
   makeSegment("1", 7.7, 8.15, "research", "Chrome", "AI vocabulary research"),
-  makeSegment("2", 8.15, 9.35, "creation_development", "Codex", "Orbit desktop rewrite"),
+  makeSegment("2", 8.15, 9.35, "creation_development", "Codex", "Daily Task Monitor desktop rewrite"),
   makeSegment("3", 9.35, 9.6, "social", "WeChat", "微信"),
   makeSegment("4", 9.6, 10.35, "text_input", "Obsidian", "English grammar notes"),
   makeSegment("5", 10.35, 11.25, "video_input", "Chrome", "Lecture: Memory and Learning", "learning"),
@@ -244,63 +187,6 @@ function formatDuration(seconds: number): string {
 function monitoredShare(seconds: number, monitoredSeconds: number): string {
   return monitoredSeconds > 0 ? `${(seconds / monitoredSeconds * 100).toFixed(1)}%` : "—";
 }
-
-const collectionStatusLabel: Record<CollectionChannelHealth["status"], string> = {
-  healthy: "正常",
-  degraded: "需关注",
-  paused: "已暂停",
-  unavailable: "不可用",
-  "permission-denied": "缺少权限",
-};
-
-function CollectionHealthPanel({ health }: { health: CollectionHealth | null }) {
-  if (!health) return <section className="panel collection-health-loading" aria-live="polite"><RefreshCw className="spinning" size={20} /><div><b>正在检查采集状态</b><small>正在读取本机权限、采集器和浏览器通道…</small></div></section>;
-  const channels: Array<[string, CollectionChannelHealth]> = [
-    ["桌面应用", health.desktop],
-    ["窗口标题", health.windowTitle],
-    ["空闲检测", health.idle],
-    ["连续性", health.continuity],
-    ["屏幕录制权限", health.screenRecording],
-    ["浏览器实时 watcher", health.browserWatcher],
-    ["浏览器历史证据", health.browserHistory],
-  ];
-  const issueCount = channels.filter(([, channel]) => channel.status !== "healthy").length;
-  const overallStatus = !health.monitoringEnabled ? "采集已暂停" : issueCount ? `${issueCount} 项需关注` : "全部正常";
-  const overallAccent = !health.monitoringEnabled ? "#d97706" : issueCount ? "#d97706" : "#059669";
-  const formatLastSuccess = (value: number | null) => value
-    ? `最近成功 ${new Date(value).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}`
-    : "尚无成功记录";
-  return <div className="collection-health" aria-label="采集健康诊断">
-    <section className="metric-grid health-metric-grid" aria-label="采集健康概览">
-      <article className="metric-card" style={{ "--accent": overallAccent } as React.CSSProperties}><span>整体状态</span><strong>{overallStatus}</strong><small>{health.monitoringEnabled ? `${channels.length - issueCount}/${channels.length} 个通道正常` : "可在设置中恢复桌面监测"}</small></article>
-      <article className="metric-card" style={{ "--accent": "#2563eb" } as React.CSSProperties}><span>浏览器实时来源</span><strong>{health.watcherSourceCount}</strong><small>当前活跃的扩展连接</small></article>
-      <article className="metric-card" style={{ "--accent": "#7c3aed" } as React.CSSProperties}><span>最近 24 小时网页计量</span><strong>{formatDuration(health.measuredBrowserSeconds)}</strong><small>{health.measuredBrowserSliceCount} 个可信心跳切片</small></article>
-    </section>
-
-    <section className="panel collection-channel-panel">
-      <div className="panel-heading"><div><span>CHANNEL STATUS</span><h2>采集通道</h2></div><i><Activity size={18} /></i></div>
-      <div className="collection-health-grid">
-        {channels.map(([label, channel]) => <article className="collection-health-row" data-status={channel.status} key={label}>
-          <div className="collection-health-row-head"><span><i aria-hidden="true" /><b>{label}</b></span><strong>{collectionStatusLabel[channel.status]}</strong></div>
-          <p>{channel.detail}</p>
-          <small>{formatLastSuccess(channel.lastSuccessAtMs)}</small>
-        </article>)}
-      </div>
-    </section>
-
-    <section className="panel watcher-config-panel">
-      <div className="panel-heading"><div><span>BROWSER WATCHER</span><h2>浏览器扩展连接</h2></div><i><Network size={18} /></i></div>
-      <p>扩展通过本机回环地址发送活动标签页心跳。连接码仅用于这台电脑，不会发送到外部服务。</p>
-      <div className="watcher-config-grid">
-        <label htmlFor="browser-watcher-endpoint"><span>扩展服务地址</span><input id="browser-watcher-endpoint" readOnly value={health.watcherEndpoint} /></label>
-        <label htmlFor="browser-watcher-token"><span>本机连接码</span><input id="browser-watcher-token" readOnly value={health.watcherToken} /></label>
-      </div>
-    </section>
-  </div>;
-}
-
-const DASHBOARD_SYNC_INTERVAL_MS = 60_000;
-const EMPTY_ACTIVITY_COMPOSITIONS = buildFallbackActivityCompositions([]);
 
 function MetricCard({ label, value, note, accent, onActivate }: { label: string; value: string; note: string; accent: string; onActivate?: () => void }) {
   const content = <>
@@ -415,22 +301,15 @@ function aiHealthPresentation(health: AiConnectionHealth | null, desktopRuntime:
 }
 
 export default function App({ initialSegments }: { initialSegments?: Segment[] }) {
-  const showInlineSettingsButton = !usesNativeMacSettingsMenu();
   const [headerLayout, setHeaderLayout] = useState<HeaderLayout>(() => (
     typeof window === "undefined" ? "wide" : resolveHeaderLayout(window.innerWidth)
   ));
   const [tab, setTab] = useState<Tab>("today");
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [todayAssistantOpen, setTodayAssistantOpen] = useState(false);
   const [graphOpen, setGraphOpen] = useState(false);
   const [monitoring, setMonitoring] = useState(true);
-  const [selectedDate, setSelectedDate] = useState(() => new Date().toLocaleDateString("sv-SE"));
   const [segments, setSegments] = useState(() => initialSegments ?? (isDesktopRuntime() ? [] : sampleSegments));
-  const [segmentsDate, setSegmentsDate] = useState(selectedDate);
-  const [authoritativeActivityCompositions, setAuthoritativeActivityCompositions] = useState<{
-    date: string;
-    value: ActivityCompositions;
-  } | null>(null);
+  const [authoritativeActivityCompositions, setAuthoritativeActivityCompositions] = useState<ActivityCompositions | null>(null);
   const [todayActivityScope, setTodayActivityScope] = useState<ActivityScope>(() => (
     typeof window === "undefined"
       ? "all"
@@ -442,12 +321,11 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
       return [appIdentityKey(segment.app, path), fallbackAppIdentity(segment.app, path)];
     }),
   ));
+  const [selectedDate, setSelectedDate] = useState(() => new Date().toLocaleDateString("sv-SE"));
   const [desktopMessage, setDesktopMessage] = useState("本地预览数据");
   const [providers, setProviders] = useState<AiProvider[]>([]);
   const [browserSources, setBrowserSources] = useState<BrowserSource[]>([]);
-  const [collectionHealth, setCollectionHealth] = useState<CollectionHealth | null>(null);
   const [settingsMessage, setSettingsMessage] = useState("");
-  const [idleThresholdMinutes, setIdleThresholdMinutes] = useState(6);
   const [aiBackfillEnabled, setAiBackfillEnabled] = useState(false);
   const [aiExecutionMode, setAiExecutionMode] = useState<AiExecutionMode>("api-key");
   const [selectedApiProviderId, setSelectedApiProviderId] = useState<string | null>(null);
@@ -472,21 +350,14 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
     if (typeof window === "undefined") return "classic-workbench";
     return normalizeStoredTheme(window.localStorage.getItem("daily-task-monitor-ui-theme"));
   });
-  const [uiFont, setUiFont] = useState<UiFont>(() => {
-    if (typeof window === "undefined") return "Ubuntu";
-    return normalizeStoredFont(window.localStorage.getItem("daily-task-monitor-ui-font"));
-  });
   const [experimentalKnowledgeGraphEnabled, setExperimentalKnowledgeGraphEnabled] = useState(() => {
     if (typeof window === "undefined") return false;
     return window.localStorage.getItem("daily-task-monitor-knowledge-graph") === "true";
   });
-  const [systemFonts, setSystemFonts] = useState<string[]>(["Ubuntu"]);
   const [focusMinutes, setFocusMinutes] = useState(45);
   const [focusRunning, setFocusRunning] = useState(false);
-  const [focusPaused, setFocusPaused] = useState(false);
   const [focusSessionId, setFocusSessionId] = useState<string | null>(null);
-  const [focusEndsAtMs, setFocusEndsAtMs] = useState<number | null>(null);
-  const [focusPausedRemainingSeconds, setFocusPausedRemainingSeconds] = useState<number | null>(null);
+  const [focusOpen, setFocusOpen] = useState(false);
   const [dailyGoal, setDailyGoal] = useState<DailyGoalRecord>(() => ({
     date: selectedDate,
     goals: "继续完善桌面版任务监测系统",
@@ -503,13 +374,6 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
   const previewReviewsRef = useRef(previewReviews);
   const [pendingReviewSubjects, setPendingReviewSubjects] = useState(() => pendingReviewSubjectIds(previewReviews));
   const [dailyAnalysis, setDailyAnalysis] = useState<ScopedDailyAnalysisResult | null>(null);
-  const [classificationRulePreview, setClassificationRulePreview] = useState<ClassificationRulePreview | null>(null);
-  const [classificationCorrectionPending, setClassificationCorrectionPending] = useState(false);
-  const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
-  const [syncPassphrase, setSyncPassphrase] = useState("");
-  const [syncPending, setSyncPending] = useState(false);
-  const [externalContext, setExternalContext] = useState<ExternalContextItem[]>([]);
-  const [contextImportPending, setContextImportPending] = useState(false);
   const appFrameRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLElement>(null);
   const timelineRef = useRef<HTMLElement>(null);
@@ -522,34 +386,24 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
   const aiNoticeDialogRef = useRef<HTMLElement>(null);
   const aiNoticeReturnFocusRef = useRef<HTMLElement | null>(null);
   const themeSelectionVersionRef = useRef(0);
-  const idleThresholdSelectionVersionRef = useRef(0);
   const aiReviewMarkersMountedRef = useRef(false);
   const aiReviewMarkersRequestRef = useRef(0);
-  const dashboardRequestRef = useRef(0);
   const dailyAutoQueueRef = useRef(new Map<string, DailyAnalysisQueueCheckpoint>());
-  const dashboardSegments = segmentsDate === selectedDate ? segments : [];
-  const metrics = useMemo(() => buildDashboardMetrics(dashboardSegments), [dashboardSegments]);
+  const metrics = useMemo(() => buildDashboardMetrics(segments), [segments]);
   const activityCompositions = useMemo(
-    () => {
-      if (!isDesktopRuntime()) return buildFallbackActivityCompositions(dashboardSegments);
-      return authoritativeActivityCompositions?.date === selectedDate
-        ? authoritativeActivityCompositions.value
-        : dashboardSegments.length
-          ? buildFallbackActivityCompositions(dashboardSegments)
-          : EMPTY_ACTIVITY_COMPOSITIONS;
-    },
-    [authoritativeActivityCompositions, dashboardSegments, selectedDate],
+    () => authoritativeActivityCompositions ?? buildFallbackActivityCompositions(segments),
+    [authoritativeActivityCompositions, segments],
   );
   const aiStatus = aiHealthPresentation(aiConnectionHealth, isDesktopRuntime());
-  const totalSwitches = Math.max(0, dashboardSegments.length - 1);
+  const totalSwitches = Math.max(0, segments.length - 1);
   const switchesPerActiveHour = metrics.activeSeconds > 0
     ? totalSwitches * 3_600 / metrics.activeSeconds
     : null;
-  const longestFocusSegment = dashboardSegments
+  const longestFocusSegment = segments
     .filter((item) => item.category !== "idle")
     .reduce<Segment | null>((longest, item) => !longest || item.endMs - item.startMs > longest.endMs - longest.startMs ? item : longest, null);
   const longestFocus = longestFocusSegment ? (longestFocusSegment.endMs - longestFocusSegment.startMs) / 1_000 : 0;
-  const pendingSegments = dashboardSegments.filter((item) => item.needsReview || item.category === "pending");
+  const pendingSegments = segments.filter((item) => item.needsReview || item.category === "pending");
   const pendingSeconds = activityCompositions.all.items.find((item) => item.key === "pending")?.seconds ?? 0;
   const classificationCoverage = Math.round(
     ((metrics.monitoredSeconds - pendingSeconds) / Math.max(metrics.monitoredSeconds, 1)) * 100,
@@ -644,33 +498,6 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
   }, []);
 
   useEffect(() => {
-    if (!isDesktopRuntime()) return;
-    let active = true;
-    let unlisten: (() => void) | undefined;
-    const applyStatus = (status: FocusTimerStatus | null) => {
-      if (!active) return;
-      setFocusRunning(status !== null);
-      setFocusPaused(status?.paused ?? false);
-      setFocusSessionId(status?.sessionId ?? null);
-      setFocusEndsAtMs(status?.endsAtMs ?? null);
-      setFocusPausedRemainingSeconds(status?.paused ? status.remainingSeconds : null);
-      if (status) {
-        setFocusMinutes(status.plannedMinutes);
-        setFocusTaskId(status.taskId ?? "");
-      }
-    };
-    void getFocusTimerStatus().then(applyStatus).catch(() => undefined);
-    void listenFocusTimerChanged(applyStatus).then((stopListening) => {
-      if (active) unlisten = stopListening;
-      else stopListening();
-    }).catch(() => undefined);
-    return () => {
-      active = false;
-      unlisten?.();
-    };
-  }, []);
-
-  useEffect(() => {
     aiHealthMountedRef.current = true;
     if (!isDesktopRuntime()) {
       return () => { aiHealthMountedRef.current = false; };
@@ -736,37 +563,6 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
     }
   };
 
-  const chooseFont = async (font: UiFont) => {
-    const previousFont = uiFont;
-    setUiFont(font);
-    window.localStorage.setItem("daily-task-monitor-ui-font", font);
-    if (!isDesktopRuntime()) return;
-    try {
-      await updateUiFont(font);
-      setSettingsMessage("界面字体已保存");
-    } catch (error) {
-      setUiFont(previousFont);
-      window.localStorage.setItem("daily-task-monitor-ui-font", previousFont);
-      setSettingsMessage(`字体保存失败：${String(error)}`);
-    }
-  };
-
-  const chooseIdleThreshold = async (minutes: number) => {
-    const previousMinutes = idleThresholdMinutes;
-    const selectionVersion = ++idleThresholdSelectionVersionRef.current;
-    setIdleThresholdMinutes(minutes);
-    try {
-      await updateIdleThreshold(minutes);
-      if (selectionVersion === idleThresholdSelectionVersionRef.current) {
-        setSettingsMessage("不活跃阈值已保存");
-      }
-    } catch (error) {
-      if (selectionVersion !== idleThresholdSelectionVersionRef.current) return;
-      setIdleThresholdMinutes(previousMinutes);
-      setSettingsMessage(`不活跃阈值保存失败：${String(error)}`);
-    }
-  };
-
   const handleThemePickerKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
     const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]'));
@@ -781,29 +577,10 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
 
   useEffect(() => {
     if (!isDesktopRuntime()) return;
-    let active = true;
-    let unlisten: (() => void) | undefined;
-    void listenOpenSettings(() => {
-      if (active) setSettingsOpen(true);
-    }).then((stopListening) => {
-      if (active) unlisten = stopListening;
-      else stopListening();
-    }).catch(() => undefined);
-    return () => {
-      active = false;
-      unlisten?.();
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!isDesktopRuntime()) return;
     const requestVersion = themeSelectionVersionRef.current;
     void getAppSettings().then((nextSettings) => {
       if (requestVersion !== themeSelectionVersionRef.current) return;
       setExperimentalKnowledgeGraphEnabled(nextSettings.experimentalKnowledgeGraphEnabled);
-      setUiFont(nextSettings.uiFont || "Ubuntu");
-      window.localStorage.setItem("daily-task-monitor-ui-font", nextSettings.uiFont || "Ubuntu");
-      setIdleThresholdMinutes(nextSettings.idleThresholdMinutes);
       setAiExecutionMode(nextSettings.aiExecutionMode ?? "api-key");
       setSelectedApiProviderId(nextSettings.selectedApiProviderId ?? null);
       setAiAutomation({
@@ -849,14 +626,6 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
       (previouslyFocused ?? settingsButtonRef.current)?.focus();
     };
   }, [settingsOpen]);
-
-  useEffect(() => {
-    if (!isDesktopRuntime()) return;
-    void listSystemFonts().then((fonts) => {
-      const normalizedFonts = fonts.map(normalizeFontFamilyName).filter(isUsableFontFamily);
-      setSystemFonts(Array.from(new Set(["Ubuntu", ...normalizedFonts])).sort((left, right) => left.localeCompare(right)));
-    }).catch((error) => setSettingsMessage(`字体列表读取失败：${String(error)}`));
-  }, []);
 
   useEffect(() => {
     if (!settingsOpen || aiSettingsFocusRequest === 0) return;
@@ -913,53 +682,28 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
     }
   };
 
-  const refreshDashboard = async (): Promise<number | null> => {
-    if (!isDesktopRuntime()) return null;
-    const requestId = ++dashboardRequestRef.current;
+  const refreshDashboard = async () => {
+    if (!isDesktopRuntime()) return;
     try {
       const dashboard = await loadDashboardSnapshot(selectedDate);
-      if (requestId !== dashboardRequestRef.current) return null;
       const { startMs, endMs } = dayBounds(selectedDate);
       const nextSegments = toUiSegments(dashboard.timeline, startMs, endMs);
       setSegments(nextSegments);
-      setSegmentsDate(selectedDate);
-      setAuthoritativeActivityCompositions({
-        date: selectedDate,
-        value: dashboard.activityComposition ?? buildFallbackActivityCompositions(nextSegments),
-      });
+      setAuthoritativeActivityCompositions(
+        dashboard.activityComposition ?? buildFallbackActivityCompositions(nextSegments),
+      );
       setDailyWorkLedgerRollup(dashboard.workLedger);
       try {
-        const nextAppIdentities = await resolveAppIdentities(nextSegments);
-        if (requestId === dashboardRequestRef.current) {
-          setAppIdentities(nextAppIdentities);
-        }
+        setAppIdentities(await resolveAppIdentities(nextSegments));
       } catch {
-        if (requestId === dashboardRequestRef.current) {
-          setAppIdentities(new Map(nextSegments.map((segment) => {
-            const path = segment.appPath ?? "";
-            return [appIdentityKey(segment.app, path), fallbackAppIdentity(segment.app, path)];
-          })));
-        }
+        setAppIdentities(new Map(nextSegments.map((segment) => {
+          const path = segment.appPath ?? "";
+          return [appIdentityKey(segment.app, path), fallbackAppIdentity(segment.app, path)];
+        })));
       }
-      if (requestId === dashboardRequestRef.current) {
-        setDesktopMessage("SQLite 数据已同步");
-      }
-      return nextSegments.length;
+      setDesktopMessage("SQLite 数据已同步");
     } catch (error) {
-      if (requestId === dashboardRequestRef.current) {
-        setDesktopMessage(`读取失败：${String(error)}`);
-      }
-      return null;
-    }
-  };
-
-  const refreshExternalContext = async () => {
-    if (!isDesktopRuntime()) return;
-    const { startMs, endMs } = dayBounds(selectedDate);
-    try {
-      setExternalContext(await loadExternalContext(startMs, endMs));
-    } catch (error) {
-      setDesktopMessage(`上下文读取失败：${String(error)}`);
+      setDesktopMessage(`读取失败：${String(error)}`);
     }
   };
 
@@ -985,82 +729,7 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
   }, []);
 
   useEffect(() => {
-    if (!isDesktopRuntime()) return;
-    const observedDate = new Date().toLocaleDateString("sv-SE");
-    const { startMs, endMs } = dayBounds(selectedDate);
-    let active = true;
-    let unlisten: (() => void) | undefined;
-    let emptyRetryTimer: ReturnType<typeof setTimeout> | undefined;
-    let activityRefreshTimer: ReturnType<typeof setTimeout> | undefined;
-    let dashboardSyncTimer: ReturnType<typeof setInterval> | undefined;
-    let lastActivityRefreshAt = Date.now();
-
-    const refreshCurrentDay = () => {
-      if (!active) return;
-      const currentDate = new Date().toLocaleDateString("sv-SE");
-      if (currentDate !== observedDate) {
-        if (selectedDate === observedDate) setSelectedDate(currentDate);
-        return;
-      }
-      if (selectedDate !== currentDate || document.visibilityState === "hidden") return;
-      if (emptyRetryTimer) {
-        clearTimeout(emptyRetryTimer);
-        emptyRetryTimer = undefined;
-      }
-      if (activityRefreshTimer) {
-        clearTimeout(activityRefreshTimer);
-        activityRefreshTimer = undefined;
-      }
-      lastActivityRefreshAt = Date.now();
-      void refreshDashboard();
-    };
-
-    const refreshWhenVisible = () => {
-      if (document.visibilityState !== "hidden") refreshCurrentDay();
-    };
-
-    void refreshDashboard().then((segmentCount) => {
-      if (!active || segmentCount !== 0 || selectedDate !== observedDate) return;
-      emptyRetryTimer = setTimeout(() => {
-        emptyRetryTimer = undefined;
-        if (active) void refreshDashboard();
-      }, DASHBOARD_SYNC_INTERVAL_MS);
-    });
-
-    void listenActivityChanged((event) => {
-      if (!active || event.observedAtMs < startMs || event.observedAtMs >= endMs) return;
-      if (emptyRetryTimer) {
-        clearTimeout(emptyRetryTimer);
-        emptyRetryTimer = undefined;
-      }
-      if (activityRefreshTimer) return;
-      const elapsed = Date.now() - lastActivityRefreshAt;
-      const delay = Math.max(500, DASHBOARD_SYNC_INTERVAL_MS - elapsed);
-      activityRefreshTimer = setTimeout(() => {
-        activityRefreshTimer = undefined;
-        lastActivityRefreshAt = Date.now();
-        if (active) void refreshDashboard();
-      }, delay);
-    }).then((stopListening) => {
-      if (active) unlisten = stopListening;
-      else stopListening();
-    }).catch(() => undefined);
-
-    if (selectedDate === observedDate) {
-      dashboardSyncTimer = setInterval(refreshCurrentDay, DASHBOARD_SYNC_INTERVAL_MS);
-      window.addEventListener("focus", refreshCurrentDay);
-      document.addEventListener("visibilitychange", refreshWhenVisible);
-    }
-
-    return () => {
-      active = false;
-      if (emptyRetryTimer) clearTimeout(emptyRetryTimer);
-      if (activityRefreshTimer) clearTimeout(activityRefreshTimer);
-      if (dashboardSyncTimer) clearInterval(dashboardSyncTimer);
-      window.removeEventListener("focus", refreshCurrentDay);
-      document.removeEventListener("visibilitychange", refreshWhenVisible);
-      unlisten?.();
-    };
+    void refreshDashboard();
   }, [selectedDate]);
 
   useEffect(() => {
@@ -1206,43 +875,19 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
 
   const toggleFocus = async () => {
     if (!isDesktopRuntime()) {
-      if (!focusRunning) {
-        setFocusRunning(true);
-        setFocusPaused(false);
-        setFocusSessionId("preview-focus");
-        setFocusEndsAtMs(Date.now() + focusMinutes * 60_000);
-      } else {
-        setFocusRunning(false);
-        setFocusPaused(false);
-        setFocusSessionId(null);
-        setFocusEndsAtMs(null);
-      }
+      setFocusRunning((value) => !value);
       return;
     }
     const today = new Date().toLocaleDateString("sv-SE");
     if (!focusRunning && selectedDate !== today) return;
     if (!focusRunning) {
       const id = await beginFocus(selectedDate, dailyGoal.goals, focusMinutes, focusTaskId || null);
-      const current = await getFocusTimerStatus().catch(() => null);
-      setFocusSessionId(current?.sessionId ?? id);
+      setFocusSessionId(id);
       setFocusRunning(true);
-      setFocusPaused(current?.paused ?? false);
-      setFocusEndsAtMs(current?.endsAtMs ?? Date.now() + focusMinutes * 60_000);
-      setFocusPausedRemainingSeconds(current?.paused ? current.remainingSeconds : null);
-      if (current) {
-        setFocusMinutes(current.plannedMinutes);
-        setFocusTaskId(current.taskId ?? "");
-      }
     } else if (focusSessionId) {
       const completed = await finishFocus(focusSessionId, dailyGoal.actualOutput);
-      const current = completed
-        ? null
-        : await getFocusTimerStatus().catch(() => null);
-      setFocusRunning(current !== null);
-      setFocusPaused(current?.paused ?? false);
-      setFocusSessionId(current?.sessionId ?? null);
-      setFocusEndsAtMs(current?.endsAtMs ?? null);
-      setFocusPausedRemainingSeconds(current?.paused ? current.remainingSeconds : null);
+      setFocusRunning(false);
+      setFocusSessionId(null);
       if (completed && focusTaskId) {
         setWorkflowTaskId(focusTaskId);
         setWorkflowRefreshKey((value) => value + 1);
@@ -1256,105 +901,20 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
     category: ActivityCategory,
     videoPurpose: VideoPurpose,
   ) => {
-    if (!isDesktopRuntime()) {
-      setSegments((items) => items.map((item) => item.id === segmentId
-        ? {
-          ...item,
-          category,
-          videoPurpose: category === "video_input" ? videoPurpose : "unknown",
-          confidence: 1,
-          classificationSource: "manual",
-          classificationReason: "User correction",
-          classificationModelVersion: "manual-v1",
-          needsReview: false,
-        }
-        : item));
-      return;
-    }
-    setClassificationCorrectionPending(true);
-    try {
-      const preview = await previewClassificationRule(segmentId, category, videoPurpose);
-      if (!preview) {
-        await classifySegment(segmentId, category, videoPurpose, false);
-        await refreshDashboard();
-        return;
+    setSegments((items) => items.map((item) => item.id === segmentId
+      ? {
+        ...item,
+        category,
+        videoPurpose: category === "video_input" ? videoPurpose : "unknown",
+        confidence: 1,
+        needsReview: false,
       }
-      setClassificationRulePreview(preview);
-    } catch (error) {
-      setDesktopMessage(`分类规则预览失败：${String(error)}`);
-    } finally {
-      setClassificationCorrectionPending(false);
-    }
-  };
-
-  const applyClassificationCorrection = async (createFutureRule: boolean) => {
-    const preview = classificationRulePreview;
-    if (!preview || classificationCorrectionPending) return;
-    setClassificationCorrectionPending(true);
-    try {
-      await classifySegment(preview.segmentId, preview.category, preview.videoPurpose, createFutureRule);
-      setClassificationRulePreview(null);
+      : item));
+    if (isDesktopRuntime()) {
+      await classifySegment(segmentId, category, videoPurpose);
       await refreshDashboard();
-      setDesktopMessage(createFutureRule ? "分类已修正，并保存为未来匹配规则。" : "仅修正了这条活动分类。请重新选择可创建未来规则。");
-    } catch (error) {
-      setDesktopMessage(`分类修正失败：${String(error)}`);
-    } finally {
-      setClassificationCorrectionPending(false);
     }
   };
-
-  const exportSync = async () => {
-    if (!isDesktopRuntime() || syncPending) return;
-    setSyncPending(true);
-    try {
-      const path = await exportSyncBundle(syncPassphrase);
-      if (path) setSettingsMessage(syncPassphrase ? `加密同步包已导出：${path}` : `未加密同步包已导出：${path}`);
-      setSyncStatus(await getSyncStatus());
-    } catch (error) {
-      setSettingsMessage(`同步包导出失败：${String(error)}`);
-    } finally {
-      setSyncPassphrase("");
-      setSyncPending(false);
-    }
-  };
-
-  const importSync = async () => {
-    if (!isDesktopRuntime() || syncPending) return;
-    setSyncPending(true);
-    try {
-      const result = await importSyncBundle(syncPassphrase);
-      if (result) {
-        setSettingsMessage(`已从 ${result.sourceDeviceId} 合并 ${result.insertedEventCount}/${result.bundleEventCount} 条事件。`);
-        setWorkflowRefreshKey((value) => value + 1);
-      }
-      setSyncStatus(await getSyncStatus());
-    } catch (error) {
-      setSettingsMessage(`同步包导入失败：${String(error)}`);
-    } finally {
-      setSyncPassphrase("");
-      setSyncPending(false);
-    }
-  };
-
-  const importContext = async (kind: "calendar" | "project") => {
-    if (!isDesktopRuntime() || contextImportPending) return;
-    setContextImportPending(true);
-    try {
-      const count = kind === "calendar" ? await importCalendarContext() : await importProjectContext();
-      if (count !== null) {
-        setSettingsMessage(`已导入 ${count} 条${kind === "calendar" ? "日历" : "项目"}上下文；原始活动仍仅保存在本机。`);
-        await refreshExternalContext();
-      }
-    } catch (error) {
-      setSettingsMessage(`上下文导入失败：${String(error)}`);
-    } finally {
-      setContextImportPending(false);
-    }
-  };
-
-  useEffect(() => {
-    void refreshExternalContext();
-  }, [selectedDate]);
 
   useEffect(() => {
     if (!settingsOpen || !isDesktopRuntime()) return;
@@ -1362,7 +922,6 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
       setProviders(nextProviders);
       setBrowserSources(nextSources);
       setMonitoring(nextSettings.monitoringEnabled);
-      setIdleThresholdMinutes(nextSettings.idleThresholdMinutes);
       setAiBackfillEnabled(nextSettings.aiBackfillEnabled);
       setAiExecutionMode(nextSettings.aiExecutionMode ?? "api-key");
       setSelectedApiProviderId(nextSettings.selectedApiProviderId ?? null);
@@ -1378,39 +937,12 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
       setExcludedApps(nextSettings.excludedApps.join("\n"));
       setExcludedDomains(nextSettings.excludedDomains.join("\n"));
       setExperimentalKnowledgeGraphEnabled(nextSettings.experimentalKnowledgeGraphEnabled);
-      setUiFont(nextSettings.uiFont || "Ubuntu");
-      window.localStorage.setItem("daily-task-monitor-ui-font", nextSettings.uiFont || "Ubuntu");
       if (themeOptions.some((item) => item.id === nextSettings.uiTheme)) {
         setUiTheme(nextSettings.uiTheme);
         window.localStorage.setItem("daily-task-monitor-ui-theme", nextSettings.uiTheme);
       }
     }).catch((error) => setSettingsMessage(String(error)));
-    void getSyncStatus().then(setSyncStatus).catch((error) => setSettingsMessage(`同步状态读取失败：${String(error)}`));
   }, [settingsOpen]);
-
-  useEffect(() => {
-    if (tab !== "health" || !isDesktopRuntime()) return;
-    let active = true;
-    let unlisten: (() => void) | undefined;
-    const refresh = () => {
-      void getCollectionHealth().then((health) => {
-        if (active) setCollectionHealth(health);
-      }).catch((error) => {
-        if (active) setDesktopMessage(`采集健康检查失败：${String(error)}`);
-      });
-    };
-    refresh();
-    const timer = setInterval(refresh, 15_000);
-    void listenCollectionHealthChanged(refresh).then((stopListening) => {
-      if (active) unlisten = stopListening;
-      else stopListening();
-    }).catch(() => undefined);
-    return () => {
-      active = false;
-      clearInterval(timer);
-      unlisten?.();
-    };
-  }, [tab]);
 
   const configureProvider = async (provider: AiProvider) => {
     let persisted = false;
@@ -1598,7 +1130,6 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
   };
 
   const openWorkflowTask = (taskId: string) => {
-    setTodayAssistantOpen(false);
     setWorkflowTaskId(taskId);
     setWorkflowRefreshKey((value) => value + 1);
     setTab("workflow");
@@ -1622,19 +1153,21 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
   }
 
   return (
-    <div ref={setAppFrame} className="app-frame" data-theme={uiTheme} data-header-layout={headerLayout} data-scroll-container="dashboard" style={{ "--font-selected": cssFontFamily(uiFont) } as React.CSSProperties}>
+    <div ref={setAppFrame} className="app-frame" data-theme={uiTheme} data-header-layout={headerLayout} data-scroll-container="dashboard">
       <header ref={headerRef} className="app-header">
-        <div className="header-balance-space" aria-hidden="true" />
+        <div className="brand-lockup">
+          <div className="brand-mark"><Gauge size={22} strokeWidth={2.2} /></div>
+          <div>
+            <span>LOCAL WORK CONSOLE</span>
+            <h1>每日任务监测系统</h1>
+          </div>
+        </div>
         <nav className="main-tabs" aria-label="主导航">
-          {tabOptions.map((item) => {
-            const TabIcon = item.icon;
-            return (
-              <button key={item.id} className={tab === item.id ? "active" : ""} aria-current={tab === item.id ? "page" : undefined} onClick={() => { if (item.id === "ai-review") setAiReviewSubjectId(null); setTab(item.id); }}>
-                <TabIcon size={15} strokeWidth={2} aria-hidden="true" />
-                <span>{item.label}</span>
-              </button>
-            );
-          })}
+          {(["today", "trends", "workflow", "ai-review"] as Tab[]).map((item) => (
+            <button key={item} className={tab === item ? "active" : ""} onClick={() => { if (item === "ai-review") setAiReviewSubjectId(null); setTab(item); }}>
+              {item === "today" ? "今日" : item === "trends" ? "趋势" : item === "workflow" ? "工作流" : "AI 审核"}
+            </button>
+          ))}
         </nav>
         <div className="header-actions">
           <div className={`status-chip ${monitoring ? "online" : "paused"}`}>
@@ -1654,38 +1187,20 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
             <span className="ai-status-copy">{aiStatus.label}</span>
           </button>
           <input type="date" aria-label="选择日期" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} />
-          <CompactFocusControl goal={dailyGoal.goals} minutes={focusMinutes} running={focusRunning} paused={focusPaused} endsAtMs={focusEndsAtMs} pausedRemainingSeconds={focusPausedRemainingSeconds} taskId={focusTaskId} tasks={dailyLedger?.tasks ?? []} canStart={selectedDate === new Date().toLocaleDateString("sv-SE")} onTaskChange={setFocusTaskId} onMinutesChange={setFocusMinutes} onToggle={() => void toggleFocus()} />
-          {tab === "today" && <div className="today-assistant-anchor">
-            <button
-              type="button"
-              className="icon-button today-assistant-trigger"
-              aria-label="打开今日目标和 AI 分析"
-              aria-controls="today-assistant-popover"
-              aria-expanded={todayAssistantOpen}
-              title="今日目标与 AI 分析"
-              onClick={() => setTodayAssistantOpen((value) => !value)}
-            ><Sparkles size={18} /></button>
-            <aside id="today-assistant-popover" className="today-assistant-popover" aria-label="今日目标与 AI 分析" hidden={!todayAssistantOpen}>
-              <header>
-                <div><span>ORBIT ASSISTANT</span><h2>今日助理</h2></div>
-                <button type="button" className="icon-button" aria-label="关闭今日助理" onClick={() => setTodayAssistantOpen(false)}><X size={18} /></button>
-              </header>
-              <div className="today-assistant-content">
-                <section className="goal-grid"><DailyGoalPanel selectedDate={selectedDate} localPreview={!isDesktopRuntime()} onGoalChange={setDailyGoal} onOpenTask={openWorkflowTask} onLedgerChanged={setDailyLedger} /></section>
-                <AiAnalysisPanel analysis={visibleDailyAnalysis} onReanalyze={() => void reanalyzeDaily()} />
-              </div>
-            </aside>
-          </div>}
+          <div className="focus-popover-anchor">
+            <button className="icon-button" aria-label="打开专注工具" aria-expanded={focusOpen} onClick={() => setFocusOpen((value) => !value)}><Focus size={18} /></button>
+            {focusOpen && <CompactFocusPopover goal={dailyGoal.goals} minutes={focusMinutes} running={focusRunning} taskId={focusTaskId} tasks={dailyLedger?.tasks ?? []} canStart={selectedDate === new Date().toLocaleDateString("sv-SE")} onTaskChange={setFocusTaskId} onMinutesChange={setFocusMinutes} onToggle={() => void toggleFocus()} />}
+          </div>
           <button className="icon-button" aria-label="刷新数据" onClick={() => void refreshDashboard()}><RefreshCw size={18} /></button>
-          {showInlineSettingsButton && <button ref={settingsButtonRef} className="icon-button" aria-label="打开设置" onClick={() => setSettingsOpen(true)}><Settings size={19} /></button>}
+          <button ref={settingsButtonRef} className="icon-button" aria-label="打开设置" onClick={() => setSettingsOpen(true)}><Settings size={19} /></button>
         </div>
       </header>
 
       <main>
         {tab === "today" && (
           <>
-            <section className="page-heading" data-page-heading="today">
-              <div><span>TODAY</span></div>
+            <section className="page-heading">
+              <div><span>TODAY</span><h2>今天的时间结构</h2></div>
               <p>总监测 {formatDuration(metrics.monitoredSeconds)} · 分类覆盖率 {classificationCoverage}% · 待复核/补算 {pendingSegments.length} 项{dailyWorkLedgerRollup ? ` · 台账任务 ${dailyWorkLedgerRollup.tasks.length}` : ""} · {desktopMessage}</p>
             </section>
 
@@ -1695,8 +1210,6 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
               <MetricCard label="最长专注" value={formatDuration(longestFocus)} note={`占总监测 ${monitoredShare(longestFocus, metrics.monitoredSeconds)}`} accent="#059669" onActivate={longestFocusSegment ? () => drillToTimeline({ mode: "segment", segmentId: longestFocusSegment.id }) : undefined} />
               <MetricCard label="切换频率" value={switchesPerActiveHour === null ? "—" : `${switchesPerActiveHour.toFixed(1)} 次/小时`} note={`共 ${totalSwitches} 次`} accent="#7c3aed" />
             </section>
-
-            <ExternalContextPanel items={externalContext} />
 
             <TodayAnalysisPanels
               metrics={metrics}
@@ -1711,7 +1224,7 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
             />
             <TimelinePanel
               ref={setTimeline}
-              segments={dashboardSegments}
+              segments={segments}
               identities={appIdentities}
               filter={drilldown}
               onFilterChange={setDrilldown}
@@ -1723,6 +1236,9 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
               pulse={timelinePulse}
               onPulseEnd={() => setTimelinePulse(false)}
             />
+
+            <section className="goal-grid"><DailyGoalPanel selectedDate={selectedDate} localPreview={!isDesktopRuntime()} onGoalChange={setDailyGoal} onOpenTask={openWorkflowTask} onLedgerChanged={setDailyLedger} /></section>
+            <AiAnalysisPanel analysis={visibleDailyAnalysis} onReanalyze={() => void reanalyzeDaily()} />
           </>
         )}
 
@@ -1751,32 +1267,7 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
           refreshKey={workflowRefreshKey}
         />}
         {tab === "ai-review" && <AiReviewPage subjectId={aiReviewSubjectId} onResolved={handleAiReviewResolved} />}
-        {tab === "health" && <>
-          <section className="page-heading">
-            <div><span>COLLECTION HEALTH</span><h2>采集健康诊断</h2></div>
-            <p>检查本机活动采集、系统权限、连续性以及浏览器实时数据通道。</p>
-          </section>
-          <div className="health-page-toolbar"><span>数据每 15 秒自动刷新</span><button className="secondary-action" type="button" aria-label="刷新采集健康诊断" onClick={() => void getCollectionHealth().then(setCollectionHealth).catch((error) => setDesktopMessage(`采集健康检查失败：${String(error)}`))}><RefreshCw size={16} />立即刷新</button></div>
-          <CollectionHealthPanel health={collectionHealth} />
-        </>}
       </main>
-
-      {classificationRulePreview && (
-        <div className="drawer-layer classification-rule-layer" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !classificationCorrectionPending && setClassificationRulePreview(null)}>
-          <section className="classification-rule-dialog" role="dialog" aria-modal="true" aria-labelledby="classification-rule-title">
-            <header><div><span>CLASSIFICATION RULE</span><h2 id="classification-rule-title">预览未来分类规则</h2></div><button className="icon-button" aria-label="关闭分类规则预览" disabled={classificationCorrectionPending} onClick={() => setClassificationRulePreview(null)}><X size={19} /></button></header>
-            <p>当前活动会被修正为“{displayMetaForActivity(classificationRulePreview.category, classificationRulePreview.videoPurpose).label}”。你可以只修正这一条，也可以让完全相同的应用与窗口标题在未来自动匹配。</p>
-            <dl>
-              <div><dt>应用</dt><dd>{classificationRulePreview.app}</dd></div>
-              <div><dt>窗口标题</dt><dd>{classificationRulePreview.title || "无窗口标题"}</dd></div>
-              <div><dt>匹配方式</dt><dd>应用 + 窗口标题完全一致</dd></div>
-              <div><dt>历史参考</dt><dd>本地已有 {classificationRulePreview.historicalMatchCount} 条相同证据；规则不会追溯改写它们</dd></div>
-            </dl>
-            <p className="classification-rule-privacy"><ShieldCheck size={15} />规则只保存在本机 SQLite，不会上传原始活动或窗口标题。</p>
-            <footer><button type="button" className="secondary-action" disabled={classificationCorrectionPending} onClick={() => void applyClassificationCorrection(false)}>仅修正这条</button><button type="button" className="workflow-primary-button" disabled={classificationCorrectionPending} onClick={() => void applyClassificationCorrection(true)}>修正并创建未来规则</button></footer>
-          </section>
-        </div>
-      )}
 
       {aiAutomationNoticeOpen && (
         <div className="drawer-layer ai-notice-layer" role="presentation">
@@ -1829,21 +1320,13 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
                 </button>)}
               </div>
             </SettingsSection>
-            <SettingsSection icon={<FileText size={18} />} title="界面字体">
-              <label className="font-select-row">
-                <span><b>字体</b><small>桌面端列出操作系统中已安装的字体；等宽内容仍使用 Ubuntu Mono。</small></span>
-                <select aria-label="选择界面字体" value={uiFont} onChange={(event) => void chooseFont(event.target.value)}>
-                  {Array.from(new Set([uiFont, ...systemFonts])).map((font) => <option key={font} value={font}>{font}</option>)}
-                </select>
-              </label>
-            </SettingsSection>
             <SettingsSection icon={<Network size={18} />} title="实验功能">
               <div className="setting-row"><span><b>知识空间</b><small>用最近 30 天真实活动构建本地三维关系图谱</small></span><button className={experimentalKnowledgeGraphEnabled ? "toggle on" : "toggle"} aria-label="启用知识空间实验" aria-pressed={experimentalKnowledgeGraphEnabled} onClick={() => void toggleKnowledgeGraphExperiment()}><i /></button></div>
               {experimentalKnowledgeGraphEnabled && <div className="knowledge-experiment-actions"><button className="wide-button" onClick={() => void chooseTheme("knowledge-space")}>启用配套主题</button><button className="wide-button knowledge-entry" onClick={() => { setSettingsOpen(false); setGraphOpen(true); }}><Network size={16} />进入知识图谱</button></div>}
             </SettingsSection>
             <SettingsSection icon={<Activity size={18} />} title="监控与运行状态">
               <div className="setting-row"><span><b>桌面监测</b><small>前台窗口与输入信号</small></span><button className={monitoring ? "toggle on" : "toggle"} aria-pressed={monitoring} onClick={() => void toggleMonitoring()}><i /></button></div>
-              <div className="setting-row"><span><b>不活跃阈值</b><small>从最后一次输入开始回填；监控断档另行记录</small></span><select aria-label="不活跃阈值" value={idleThresholdMinutes} onChange={(event) => void chooseIdleThreshold(Number(event.target.value))}><option value="6">6 分钟</option><option value="10">10 分钟</option><option value="15">15 分钟</option></select></div>
+              <div className="setting-row"><span><b>不活跃阈值</b><small>从最后一次输入开始回填；监控断档另行记录</small></span><select defaultValue="6" onChange={(event) => void updateIdleThreshold(Number(event.target.value))}><option value="6">6 分钟</option><option value="10">10 分钟</option><option value="15">15 分钟</option></select></div>
             </SettingsSection>
             <SettingsSection
               id="ai-provider-settings"
@@ -1892,27 +1375,12 @@ export default function App({ initialSegments }: { initialSegments?: Segment[] }
               <p className="settings-copy">{browserSources.length ? `${browserSources.filter((item) => item.available).length} 个 Chrome / Edge Profile 可读取` : "正在检查 Chrome / Edge Profile"}</p>
               <button className="wide-button" onClick={() => void scanBrowsers()}>立即扫描</button>
             </SettingsSection>
-            <SettingsSection icon={<CalendarDays size={18} />} title="日历与项目上下文">
-              <p className="settings-copy">导入本地 .ics 日历或 provider-neutral JSON 项目快照。它们只作为计划上下文展示，不会伪装成自动采集的活动事实，也不会上传原始时间线。</p>
-              <div className="sync-actions"><button className="wide-button" disabled={contextImportPending} onClick={() => void importContext("calendar")}>导入 .ics 日历</button><button className="wide-button" disabled={contextImportPending} onClick={() => void importContext("project")}>导入项目 JSON</button></div>
-            </SettingsSection>
             <SettingsSection icon={<ShieldCheck size={18} />} title="隐私排除">
               <label className="settings-field" htmlFor="excluded-apps">不发送给 AI 的应用（每行一个）</label>
               <textarea id="excluded-apps" value={excludedApps} onChange={(event) => setExcludedApps(event.target.value)} placeholder="例如：password-manager" />
               <label className="settings-field" htmlFor="excluded-domains">不采集、不发送的域名（每行一个）</label>
               <textarea id="excluded-domains" value={excludedDomains} onChange={(event) => setExcludedDomains(event.target.value)} placeholder="例如：company.internal" />
               <button className="wide-button" onClick={() => void savePrivacyExclusions()}>保存隐私排除</button>
-            </SettingsSection>
-            <SettingsSection icon={<Network size={18} />} title="跨设备事件同步">
-              <p className="settings-copy">仅同步显式组织事件，不包含原始应用时间线、窗口标题或网页内容。导入采用只追加集合并，重复事件不会再次应用。</p>
-              <dl className="sync-status-grid">
-                <div><dt>本机设备 ID</dt><dd>{syncStatus?.deviceId ?? "正在初始化"}</dd></div>
-                <div><dt>已知设备</dt><dd>{syncStatus?.knownDeviceCount ?? 0}</dd></div>
-                <div><dt>事件数</dt><dd>{syncStatus?.eventCount ?? 0}</dd></div>
-              </dl>
-              <label className="settings-field" htmlFor="sync-passphrase">端到端加密口令（可选，不保存）</label>
-              <input id="sync-passphrase" className="sync-passphrase" type="password" autoComplete="off" value={syncPassphrase} onChange={(event) => setSyncPassphrase(event.target.value)} placeholder="留空将导出可读 JSON" />
-              <div className="sync-actions"><button className="wide-button" disabled={syncPending} onClick={() => void exportSync()}>导出同步包</button><button className="wide-button" disabled={syncPending} onClick={() => void importSync()}>导入并合并</button></div>
             </SettingsSection>
             <SettingsSection icon={<Settings size={18} />} title="高级与校准">
               <DailyMarkdownExportButton date={selectedDate} desktopRuntime={isDesktopRuntime()} exporter={exportDailyReport} onMessage={setSettingsMessage} />

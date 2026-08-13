@@ -1,8 +1,0 @@
-:root { color-scheme: light dark; font: 14px system-ui, sans-serif; }
-body { margin: 0; }
-main { box-sizing: border-box; max-width: 560px; padding: 24px; }
-h1 { font-size: 20px; }
-label { display: grid; gap: 6px; margin: 16px 0; }
-input { padding: 8px; }
-button { padding: 8px 18px; }
-output { margin-left: 12px; }

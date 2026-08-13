@@ -797,42 +797,6 @@ fn dashboard_totals_are_derived_from_non_overlapping_segments() {
 }
 
 #[test]
-fn dashboard_totals_collapse_overlapping_collector_segments() {
-    let db = Database::open_in_memory().unwrap();
-    db.insert_segment(&segment(
-        "idle-a",
-        0,
-        4 * 3_600,
-        ActivityCategory::Idle,
-        VideoPurpose::Unknown,
-    ))
-    .unwrap();
-    db.insert_segment(&segment(
-        "idle-b",
-        0,
-        4 * 3_600,
-        ActivityCategory::Idle,
-        VideoPurpose::Unknown,
-    ))
-    .unwrap();
-    db.insert_segment(&segment(
-        "research",
-        3_600_000,
-        3_600,
-        ActivityCategory::Research,
-        VideoPurpose::Unknown,
-    ))
-    .unwrap();
-
-    let totals = db.dashboard_totals(0, 14_400_000).unwrap();
-
-    assert_eq!(totals.monitored_seconds, 4 * 3_600);
-    assert_eq!(totals.idle_seconds, 3 * 3_600);
-    assert_eq!(totals.active_seconds, 3_600);
-    assert_eq!(totals.learning_seconds, 3_600);
-}
-
-#[test]
 fn inserting_same_segment_id_is_idempotent() {
     let db = Database::open_in_memory().unwrap();
     let item = segment(
@@ -847,62 +811,6 @@ fn inserting_same_segment_id_is_idempotent() {
     db.insert_segment(&item).unwrap();
 
     assert_eq!(db.segment_count().unwrap(), 1);
-}
-
-#[test]
-fn collector_lease_allows_one_writer_and_recovers_after_expiry() {
-    let path = std::env::temp_dir().join(format!(
-        "daily-task-monitor-collector-lease-{}-{}.db",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    let first = Database::open(&path).unwrap();
-    let second = Database::open(&path).unwrap();
-
-    assert!(
-        first
-            .try_acquire_collector_lease("first", 1_000, 20_000)
-            .unwrap()
-    );
-    assert!(
-        !second
-            .try_acquire_collector_lease("second", 10_000, 20_000)
-            .unwrap()
-    );
-    assert!(
-        first
-            .try_acquire_collector_lease("first", 15_000, 20_000)
-            .unwrap()
-    );
-    assert!(
-        !second
-            .try_acquire_collector_lease("second", 34_999, 20_000)
-            .unwrap()
-    );
-    assert!(
-        second
-            .try_acquire_collector_lease("second", 35_000, 20_000)
-            .unwrap()
-    );
-    assert!(
-        !first
-            .try_acquire_collector_lease("first", 35_001, 20_000)
-            .unwrap()
-    );
-    assert!(!first.release_collector_lease("first").unwrap());
-    assert!(second.release_collector_lease("second").unwrap());
-    assert!(
-        first
-            .try_acquire_collector_lease("first", 35_002, 20_000)
-            .unwrap()
-    );
-
-    drop(second);
-    drop(first);
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]

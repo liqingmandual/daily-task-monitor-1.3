@@ -64,7 +64,7 @@ function New-SampleEvent {
 }
 
 $events = @(
-    (New-SampleEvent -Start ($date.AddHours(9).AddMinutes(10)) -End ($date.AddHours(9).AddMinutes(42)) -App "Code" -Title "Orbit - Visual Studio Code" -Category $CatDev)
+    (New-SampleEvent -Start ($date.AddHours(9).AddMinutes(10)) -End ($date.AddHours(9).AddMinutes(42)) -App "Code" -Title "Daily task monitor - Visual Studio Code" -Category $CatDev)
     (New-SampleEvent -Start ($date.AddHours(9).AddMinutes(42)) -End ($date.AddHours(10).AddMinutes(6)) -App "chrome" -Title "Task time tracking methods - Google Search" -Category $CatResearch)
     (New-SampleEvent -Start ($date.AddHours(10).AddMinutes(6)) -End ($date.AddHours(10).AddMinutes(38)) -App "WINWORD" -Title "Efficiency report product plan.docx" -Category $CatOutput)
     (New-SampleEvent -Start ($date.AddHours(10).AddMinutes(38)) -End ($date.AddHours(10).AddMinutes(55)) -App "WeChat" -Title "Project discussion" -Category $CatComm)

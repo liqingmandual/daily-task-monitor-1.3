@@ -16,21 +16,6 @@ import type {
 } from "./activity-composition";
 
 export const ANALYSIS_CHANGED_EVENT = "analysis-changed";
-export const OPEN_SETTINGS_EVENT = "open-settings";
-export const FOCUS_TIMER_CHANGED_EVENT = "focus-timer-changed";
-
-export interface FocusTimerStatus {
-  sessionId: string;
-  goalDate: string;
-  goalText: string;
-  plannedMinutes: number;
-  startedAtMs: number;
-  endsAtMs: number;
-  remainingSeconds: number;
-  expired: boolean;
-  paused: boolean;
-  taskId: string | null;
-}
 
 export interface AnalysisChangedEvent {
   page: "daily" | "trends";
@@ -60,49 +45,6 @@ export interface BackendSegment {
   modelVersion: string;
   needsReview: boolean;
   inactivityReason?: InactivityReason | null;
-}
-
-export interface ClassificationRulePreview {
-  segmentId: string;
-  matcherKind: "app_title";
-  app: string;
-  title: string;
-  category: ActivityCategory;
-  videoPurpose: VideoPurpose;
-  historicalMatchCount: number;
-  appliesToFutureMatchesOnly: boolean;
-}
-
-export interface SyncStatus {
-  deviceId: string;
-  knownDeviceCount: number;
-  eventCount: number;
-  lastEventAtMs: number | null;
-  encryptionAvailable: boolean;
-}
-
-export interface SyncImportResult {
-  insertedEventCount: number;
-  bundleEventCount: number;
-  sourceDeviceId: string;
-  path: string;
-}
-
-export type ExternalContextKind = "calendar_event" | "project" | "task";
-
-export interface ExternalContextItem {
-  id: string;
-  sourceId: string;
-  sourceName: string;
-  sourceKind: string;
-  externalId: string;
-  kind: ExternalContextKind;
-  title: string;
-  startAtMs: number | null;
-  endAtMs: number | null;
-  projectName: string;
-  status: string;
-  importedAtMs: number;
 }
 
 export interface DashboardSnapshot {
@@ -135,37 +77,6 @@ export interface BrowserSource {
   available: boolean;
 }
 
-export type CollectionChannelStatus =
-  | "healthy"
-  | "degraded"
-  | "paused"
-  | "unavailable"
-  | "permission-denied";
-
-export interface CollectionChannelHealth {
-  status: CollectionChannelStatus;
-  lastSuccessAtMs: number | null;
-  detail: string;
-}
-
-export interface CollectionHealth {
-  generatedAtMs: number;
-  platform: string;
-  monitoringEnabled: boolean;
-  desktop: CollectionChannelHealth;
-  windowTitle: CollectionChannelHealth;
-  idle: CollectionChannelHealth;
-  continuity: CollectionChannelHealth;
-  screenRecording: CollectionChannelHealth;
-  browserWatcher: CollectionChannelHealth;
-  browserHistory: CollectionChannelHealth;
-  watcherEndpoint: string;
-  watcherToken: string;
-  watcherSourceCount: number;
-  measuredBrowserSliceCount: number;
-  measuredBrowserSeconds: number;
-}
-
 export interface AppSettings {
   idleThresholdMinutes: number;
   monitoringEnabled: boolean;
@@ -183,7 +94,6 @@ export interface AppSettings {
   excludedApps: string[];
   excludedDomains: string[];
   uiTheme: UiTheme;
-  uiFont: UiFont;
   experimentalKnowledgeGraphEnabled: boolean;
 }
 
@@ -202,7 +112,6 @@ export type SettingsPatch = Partial<Pick<AppSettings,
   | "excludedApps"
   | "excludedDomains"
   | "uiTheme"
-  | "uiFont"
   | "experimentalKnowledgeGraphEnabled"
 >>;
 
@@ -234,12 +143,6 @@ export interface AiConnectionHealth {
 
 export const AI_CONNECTION_HEALTH_CHANGED_EVENT = "ai-connection-health-changed";
 export const WORKFLOW_CHANGED_EVENT = "workflow-changed";
-export const ACTIVITY_CHANGED_EVENT = "activity-changed";
-export const COLLECTION_HEALTH_CHANGED_EVENT = "collection-health-changed";
-
-export interface ActivityChangedEvent {
-  observedAtMs: number;
-}
 
 export type AiExecutionErrorKind = "provider" | "codex" | "invalid-job" | "invalid-response" | "persistence" | "unknown";
 export type AiJobStatus = "pending" | "running" | "complete" | "awaiting-reassignment";
@@ -339,8 +242,7 @@ export interface CodexHealth {
   diagnostic: string | null;
 }
 
-export type UiTheme = "moss-nocturne" | "classic-workbench" | "moon-glass" | "soft-paper" | "blueprint-data" | "knowledge-space";
-export type UiFont = string;
+export type UiTheme = "classic-workbench" | "moon-glass" | "soft-paper" | "blueprint-data" | "knowledge-space";
 
 export type KnowledgeGraphNodeKind = "category" | "app" | "domain" | "day" | "activity" | "browser-visit";
 
@@ -1141,12 +1043,6 @@ export function isDesktopRuntime(): boolean {
   return typeof window !== "undefined" && Boolean(window.__TAURI_INTERNALS__);
 }
 
-export function usesNativeMacSettingsMenu(): boolean {
-  return isDesktopRuntime()
-    && typeof navigator !== "undefined"
-    && /Macintosh|Mac OS X/i.test(navigator.userAgent);
-}
-
 export function dayBounds(date: string): { startMs: number; endMs: number } {
   const start = parseLocalDate(date);
   const end = new Date(start);
@@ -1232,9 +1128,6 @@ export function toUiSegments(
     category: record.category,
     videoPurpose: record.videoPurpose,
     confidence: record.confidence,
-    classificationSource: record.source,
-    classificationReason: record.reason,
-    classificationModelVersion: record.modelVersion,
     needsReview: record.needsReview,
     inactivityReason: record.inactivityReason ?? null,
   }));
@@ -1289,7 +1182,6 @@ export async function classifySegment(
   segmentId: string,
   category: ActivityCategory,
   videoPurpose: VideoPurpose = "unknown",
-  createFutureRule = false,
 ): Promise<void> {
   await invoke("save_manual_classification", {
     request: {
@@ -1297,49 +1189,8 @@ export async function classifySegment(
       category,
       videoPurpose: category === "video_input" ? videoPurpose : "unknown",
       reason: "User correction",
-      createFutureRule,
     },
   });
-}
-
-export async function previewClassificationRule(
-  segmentId: string,
-  category: ActivityCategory,
-  videoPurpose: VideoPurpose = "unknown",
-): Promise<ClassificationRulePreview | null> {
-  return invoke<ClassificationRulePreview | null>("preview_manual_classification_rule", {
-    request: {
-      segmentId,
-      category,
-      videoPurpose: category === "video_input" ? videoPurpose : "unknown",
-      reason: "User correction",
-      createFutureRule: false,
-    },
-  });
-}
-
-export async function getSyncStatus(): Promise<SyncStatus> {
-  return invoke<SyncStatus>("get_sync_status");
-}
-
-export async function exportSyncBundle(passphrase: string): Promise<string | null> {
-  return invoke<string | null>("export_sync_bundle", { passphrase });
-}
-
-export async function importSyncBundle(passphrase: string): Promise<SyncImportResult | null> {
-  return invoke<SyncImportResult | null>("import_sync_bundle", { passphrase });
-}
-
-export async function importCalendarContext(): Promise<number | null> {
-  return invoke<number | null>("import_calendar_context");
-}
-
-export async function importProjectContext(): Promise<number | null> {
-  return invoke<number | null>("import_project_context");
-}
-
-export async function loadExternalContext(startMs: number, endMs: number): Promise<ExternalContextItem[]> {
-  return (await invoke<ExternalContextItem[] | null>("get_external_context", { startMs, endMs })) ?? [];
 }
 
 export async function beginFocus(
@@ -1349,10 +1200,6 @@ export async function beginFocus(
   taskId: string | null = null,
 ): Promise<string> {
   return invoke<string>("start_focus_session", { goalDate: date, goalText, plannedMinutes, taskId });
-}
-
-export async function getFocusTimerStatus(): Promise<FocusTimerStatus | null> {
-  return invoke<FocusTimerStatus | null>("get_focus_timer_status");
 }
 
 export async function completeFocus(id: string, outcome: string): Promise<boolean> {
@@ -1521,38 +1368,6 @@ export async function listenWorkflowChanged(
   });
 }
 
-export async function listenActivityChanged(
-  handler: (event: ActivityChangedEvent) => void,
-): Promise<UnlistenFn> {
-  return listen<ActivityChangedEvent>(ACTIVITY_CHANGED_EVENT, (event) => {
-    handler(event.payload);
-  });
-}
-
-export async function getCollectionHealth(): Promise<CollectionHealth> {
-  return invoke<CollectionHealth>("get_collection_health");
-}
-
-export async function listenCollectionHealthChanged(
-  handler: (event: { observedAtMs: number }) => void,
-): Promise<UnlistenFn> {
-  return listen<{ observedAtMs: number }>(COLLECTION_HEALTH_CHANGED_EVENT, (event) => {
-    handler(event.payload);
-  });
-}
-
-export async function listenOpenSettings(handler: () => void): Promise<UnlistenFn> {
-  return listen<void>(OPEN_SETTINGS_EVENT, handler);
-}
-
-export async function listenFocusTimerChanged(
-  handler: (status: FocusTimerStatus | null) => void,
-): Promise<UnlistenFn> {
-  return listen<FocusTimerStatus | null>(FOCUS_TIMER_CHANGED_EVENT, (event) => {
-    handler(event.payload);
-  });
-}
-
 export async function listBrowserSources(): Promise<BrowserSource[]> {
   return invoke<BrowserSource[]>("get_browser_sources");
 }
@@ -1588,14 +1403,6 @@ export async function updatePrivacyExclusions(excludedApps: string[], excludedDo
 
 export async function updateUiTheme(uiTheme: UiTheme): Promise<void> {
   await invoke("update_settings", { patch: { uiTheme } });
-}
-
-export async function updateUiFont(uiFont: UiFont): Promise<void> {
-  await invoke("update_settings", { patch: { uiFont } });
-}
-
-export async function listSystemFonts(): Promise<string[]> {
-  return invoke<string[]>("list_system_fonts");
 }
 
 export async function updateKnowledgeGraphExperiment(experimentalKnowledgeGraphEnabled: boolean): Promise<void> {

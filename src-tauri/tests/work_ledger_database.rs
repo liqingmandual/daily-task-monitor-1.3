@@ -18,144 +18,6 @@ const LEDGER_TABLES: [&str; 8] = [
     "focus_sessions",
 ];
 
-#[test]
-fn active_focus_session_is_recoverable_until_completion() {
-    let database = Database::open_in_memory().unwrap();
-    database
-        .start_focus_session_for_task(
-            "focus-active",
-            "2026-08-13",
-            "Ship the countdown",
-            25,
-            1_000,
-            None,
-        )
-        .unwrap();
-
-    let active = database.active_focus_session().unwrap().unwrap();
-    assert_eq!(active.id, "focus-active");
-    assert_eq!(active.planned_minutes, 25);
-    assert_eq!(active.task_id, None);
-    assert_eq!(active.paused_at_ms, None);
-    assert!(
-        !database
-            .start_focus_session_for_task_if_none(
-                "focus-duplicate",
-                "2026-08-13",
-                "Must reuse active",
-                25,
-                1_100,
-                None,
-            )
-            .unwrap()
-    );
-
-    assert!(database.pause_focus_session("focus-active", 1_500).unwrap());
-    assert!(!database.pause_focus_session("focus-active", 1_600).unwrap());
-    let paused = database.active_focus_session().unwrap().unwrap();
-    assert_eq!(paused.paused_at_ms, Some(1_500));
-    assert!(
-        database
-            .resume_focus_session("focus-active", 2_500)
-            .unwrap()
-    );
-    let resumed = database.active_focus_session().unwrap().unwrap();
-    assert_eq!(resumed.paused_at_ms, None);
-    assert_eq!(resumed.paused_total_ms, 1_000);
-
-    assert!(database.pause_focus_session("focus-active", 2_700).unwrap());
-    database
-        .complete_focus_session("focus-active", 3_700, "done")
-        .unwrap();
-    assert!(database.active_focus_session().unwrap().is_none());
-    let completed = database.list_focus_sessions(0, 4_000).unwrap();
-    assert_eq!(completed[0].paused_at_ms, None);
-    assert_eq!(completed[0].paused_total_ms, 2_000);
-
-    database
-        .start_focus_session("focus-expired", "2026-08-13", "Auto complete", 25, 10_000)
-        .unwrap();
-    assert!(
-        database
-            .complete_expired_focus_session("focus-expired", 1_510_000, 1_510_100)
-            .unwrap()
-    );
-    assert!(
-        !database
-            .complete_expired_focus_session("focus-expired", 1_510_000, 1_510_200)
-            .unwrap()
-    );
-    assert!(database.active_focus_session().unwrap().is_none());
-    let automatically_completed = database.list_focus_sessions(1_500_000, 1_520_000).unwrap();
-    assert_eq!(automatically_completed[0].ended_at_ms, Some(1_510_000));
-    assert_eq!(automatically_completed[0].notified_at_ms, Some(1_510_100));
-    assert_eq!(automatically_completed[0].outcome, "");
-}
-
-#[test]
-fn v13_migration_keeps_only_the_latest_active_focus_session() {
-    let path = unique_database_path("focus-single-active-migration");
-    drop(Database::open(&path).unwrap());
-    let connection = Connection::open(&path).unwrap();
-    connection
-        .execute_batch(
-            "DROP INDEX idx_focus_sessions_single_active;
-             PRAGMA user_version = 12;
-             INSERT INTO focus_sessions(
-                id, goal_date, goal_text, planned_minutes, started_at_ms
-             ) VALUES
-                ('focus-old', '2026-08-13', 'Old', 25, 1000),
-                ('focus-new', '2026-08-13', 'New', 25, 2000);",
-        )
-        .unwrap();
-    drop(connection);
-
-    let database = Database::open(&path).unwrap();
-    assert_eq!(
-        database.active_focus_session().unwrap().unwrap().id,
-        "focus-new"
-    );
-    assert!(
-        !database
-            .start_focus_session_for_task_if_none(
-                "focus-third",
-                "2026-08-13",
-                "Third",
-                25,
-                3_000,
-                None,
-            )
-            .unwrap()
-    );
-    drop(database);
-
-    let connection = Connection::open(&path).unwrap();
-    let active_count: i64 = connection
-        .query_row(
-            "SELECT COUNT(*) FROM focus_sessions WHERE ended_at_ms IS NULL",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(active_count, 1);
-    let old_end: i64 = connection
-        .query_row(
-            "SELECT ended_at_ms FROM focus_sessions WHERE id='focus-old'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(old_end, 1_501_000);
-    assert_eq!(
-        connection
-            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
-            .unwrap(),
-        17
-    );
-    drop(connection);
-    let _ = std::fs::remove_file(path);
-}
-
 fn unique_database_path(label: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!(
         "daily-task-monitor-{label}-{}-{}.db",
@@ -299,7 +161,7 @@ fn migration_is_idempotent_and_preserves_existing_activity_data() {
         connection
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        17
+        10
     );
     assert_eq!(
         table_columns(&connection, "projects"),
@@ -378,9 +240,6 @@ fn migration_is_idempotent_and_preserves_existing_activity_data() {
             "ended_at_ms",
             "outcome",
             "task_id",
-            "paused_at_ms",
-            "paused_total_ms",
-            "notified_at_ms",
         ]
     );
     assert_eq!(
@@ -937,7 +796,7 @@ fn v10_upgrade_preserves_a_realistic_445_job_audit_history() {
         connection
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .unwrap(),
-        17
+        10
     );
     drop(connection);
     let _ = std::fs::remove_file(path);

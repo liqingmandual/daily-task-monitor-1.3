@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import * as aiReviewLib from "./lib/ai-review";
 import { activityDisplayRegistry } from "./lib/activity-composition";
-import type { AiConnectionHealth, AiReviewRecord, CollectionHealth } from "./lib/desktop";
+import type { AiConnectionHealth, AiReviewRecord } from "./lib/desktop";
 import type { Segment } from "./lib/metrics";
 
 type TestWindow = {
@@ -154,28 +154,6 @@ function aiConnectionHealth(overrides: Partial<AiConnectionHealth> = {}): AiConn
   };
 }
 
-function collectionHealth(overrides: Partial<CollectionHealth> = {}): CollectionHealth {
-  const healthy = { status: "healthy" as const, lastSuccessAtMs: 1_752_537_600_000, detail: "采集正常" };
-  return {
-    generatedAtMs: 1_752_537_600_000,
-    platform: "macos",
-    monitoringEnabled: true,
-    desktop: healthy,
-    windowTitle: healthy,
-    idle: healthy,
-    continuity: healthy,
-    screenRecording: healthy,
-    browserWatcher: healthy,
-    browserHistory: healthy,
-    watcherEndpoint: "http://127.0.0.1:27123/v1/heartbeat",
-    watcherToken: "local-test-token",
-    watcherSourceCount: 1,
-    measuredBrowserSliceCount: 4,
-    measuredBrowserSeconds: 120,
-    ...overrides,
-  };
-}
-
 function installDesktopWindow() {
   const { document, window } = parseHTML("<!doctype html><html><body><div id=\"root\"></div></body></html>");
   let activeElement: Element | null = null;
@@ -216,19 +194,9 @@ function installPreviewWindow() {
   return installed;
 }
 
-function installMacDesktopWindow() {
-  const installed = installDesktopWindow();
-  vi.stubGlobal("navigator", {
-    ...installed.window.navigator,
-    userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
-  });
-  return installed;
-}
-
 function desktopCommandResult(command: string) {
   if (command === "get_settings") return { ...appSettings, aiAutomationNoticeVersion: 1 };
   if (command === "get_ai_connection_health" || command === "refresh_ai_connection_health") return aiConnectionHealth();
-  if (command === "get_collection_health") return collectionHealth();
   if (command === "get_today_dashboard") return {
     timeline: [],
     totals: { monitoredSeconds: 0, activeSeconds: 0, idleSeconds: 0, learningSeconds: 0, categorySeconds: {} },
@@ -266,7 +234,7 @@ describe("App", () => {
       await act(async () => root.render(<App initialSegments={segments} />));
 
       expect(rootElement.querySelector(".app-frame")?.getAttribute("data-header-layout")).toBe("compact");
-      expect(rootElement.querySelectorAll(".main-tabs button")).toHaveLength(5);
+      expect(rootElement.querySelectorAll(".main-tabs button")).toHaveLength(4);
     } finally {
       await act(async () => root.unmount());
     }
@@ -288,7 +256,7 @@ describe("App", () => {
     expect(html).toContain("活动构成");
     expect(html).toContain("时间分布");
     expect(html).toContain("应用排行");
-    expect(html).toContain("活跃时间线");
+    expect(html).toContain("活动时间线");
     expect(html).toContain("搜索/调研");
     expect(html).toContain("Chrome");
   });
@@ -322,35 +290,8 @@ describe("App", () => {
   it("keeps operational details behind the settings action", () => {
     const html = renderToStaticMarkup(<App initialSegments={segments} />);
 
-    expect(html).not.toContain('class="brand-lockup"');
-    expect(html).toContain('class="header-balance-space"');
-    expect(html).not.toContain("每日任务监测系统");
     expect(html).toContain("aria-label=\"打开设置\"");
     expect(html).not.toContain("高级与校准</h2>");
-  });
-
-  it("opens settings from the native macOS menu event", async () => {
-    const { document } = installMacDesktopWindow();
-    let openSettings: (() => void) | undefined;
-    vi.mocked(listen).mockImplementation(async (event, handler) => {
-      if (event === "open-settings") openSettings = handler as () => void;
-      return () => undefined;
-    });
-    vi.mocked(invoke).mockImplementation(async (command) => desktopCommandResult(command));
-    const rootElement = document.getElementById("root") as unknown as HTMLDivElement;
-    const root = createRoot(rootElement);
-
-    try {
-      await act(async () => root.render(<App initialSegments={segments} />));
-      expect(rootElement.querySelector('button[aria-label="打开设置"]')).toBeNull();
-      expect(rootElement.querySelector(".app-frame")?.hasAttribute("data-window-chrome")).toBe(false);
-      await act(async () => openSettings?.());
-
-      expect(openSettings).toBeTypeOf("function");
-      expect(rootElement.querySelector('[role="dialog"][aria-label="设置"]')).not.toBeNull();
-    } finally {
-      await act(async () => root.unmount());
-    }
   });
 
   it("renders the classic theme, stable analysis order, and compact visual summaries", () => {
@@ -378,7 +319,7 @@ describe("App", () => {
     expect(appsIndex).toBeLessThan(timeIndex);
   });
 
-  it("keeps goals and AI in the hidden assistant before the Today workspace", () => {
+  it("composes Today in the approved heading-to-analysis order", () => {
     const html = renderToStaticMarkup(<App initialSegments={segments} />);
 
     expect(html).toContain('data-analysis-layout="three-column"');
@@ -389,7 +330,6 @@ describe("App", () => {
     expect(html).toContain('aria-label="打开专注工具"');
 
     const headingIndex = html.indexOf('class="page-heading"');
-    const assistantIndex = html.indexOf('id="today-assistant-popover"');
     const metricsIndex = html.indexOf('class="metric-grid"');
     const analysisIndex = html.indexOf('data-analysis-layout="three-column"');
     const timelineIndex = html.indexOf('id="activity-timeline"');
@@ -397,19 +337,16 @@ describe("App", () => {
     const aiAnalysisIndex = html.indexOf('class="panel ai-analysis-panel"');
 
     expect(headingIndex).toBeGreaterThanOrEqual(0);
-    expect(assistantIndex).toBeGreaterThanOrEqual(0);
-    expect(html).toContain('aria-expanded="false"');
     expect(metricsIndex).toBeGreaterThanOrEqual(0);
     expect(analysisIndex).toBeGreaterThanOrEqual(0);
     expect(timelineIndex).toBeGreaterThanOrEqual(0);
     expect(goalIndex).toBeGreaterThanOrEqual(0);
     expect(aiAnalysisIndex).toBeGreaterThanOrEqual(0);
-    expect(assistantIndex).toBeLessThan(goalIndex);
-    expect(goalIndex).toBeLessThan(aiAnalysisIndex);
-    expect(aiAnalysisIndex).toBeLessThan(headingIndex);
     expect(headingIndex).toBeLessThan(metricsIndex);
     expect(metricsIndex).toBeLessThan(analysisIndex);
     expect(analysisIndex).toBeLessThan(timelineIndex);
+    expect(timelineIndex).toBeLessThan(goalIndex);
+    expect(goalIndex).toBeLessThan(aiAnalysisIndex);
   });
 
   it("shows the first-run AI automation notice and persists acknowledgement", async () => {
@@ -1144,258 +1081,6 @@ describe("App", () => {
     }
   });
 
-  it("refreshes the dashboard after a persisted activity event", async () => {
-    vi.useFakeTimers();
-    const { document } = installDesktopWindow();
-    let emitActivity: (observedAtMs: number) => void = () => undefined;
-    let dashboardRequests = 0;
-    const observedAtMs = Date.now();
-    vi.mocked(listen).mockImplementation(async (event, handler) => {
-      if (event === "activity-changed") {
-        const callback = handler as (event: { payload: { observedAtMs: number } }) => void;
-        emitActivity = (value) => callback({ payload: { observedAtMs: value } });
-      }
-      return () => undefined;
-    });
-    vi.mocked(invoke).mockImplementation(async (command) => {
-      if (command === "get_today_dashboard") {
-        dashboardRequests += 1;
-        return {
-          timeline: dashboardRequests === 1 ? [] : [{
-            id: "live-segment",
-            startedAtMs: observedAtMs - 300_000,
-            endedAtMs: observedAtMs,
-            app: "Cursor",
-            appPath: "/Applications/Cursor.app/Contents/MacOS/Cursor",
-            title: "Live activity",
-            category: "creation_development",
-            videoPurpose: "unknown",
-            confidence: 0.9,
-            source: "rule",
-            reason: "test",
-            modelVersion: "test-v1",
-            needsReview: false,
-          }],
-          totals: { monitoredSeconds: 300, activeSeconds: 300, idleSeconds: 0, learningSeconds: 300, categorySeconds: { creation_development: 300 } },
-          workLedger: { startMs: 0, endMs: 0, projects: [], tasks: [] },
-        };
-      }
-      return desktopCommandResult(command);
-    });
-    const rootElement = document.getElementById("root") as unknown as HTMLDivElement;
-    const root = createRoot(rootElement);
-
-    try {
-      await act(async () => {
-        root.render(<App initialSegments={[]} />);
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-      expect(dashboardRequests).toBe(1);
-
-      await act(async () => {
-        emitActivity(observedAtMs - 2 * 86_400_000);
-        await vi.advanceTimersByTimeAsync(500);
-      });
-      expect(dashboardRequests).toBe(1);
-
-      await act(async () => {
-        emitActivity(observedAtMs);
-        emitActivity(observedAtMs);
-        emitActivity(observedAtMs);
-        await vi.advanceTimersByTimeAsync(59_499);
-      });
-
-      expect(dashboardRequests).toBe(1);
-
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(1);
-      });
-
-      expect(dashboardRequests).toBe(2);
-      expect(rootElement.textContent).toContain("活跃5 分钟");
-    } finally {
-      await act(async () => root.unmount());
-      vi.useRealTimers();
-    }
-  });
-
-  it("retries an empty initial dashboard after the first sampling interval", async () => {
-    vi.useFakeTimers();
-    const { document } = installDesktopWindow();
-    let dashboardRequests = 0;
-    const observedAtMs = Date.now();
-    vi.mocked(listen).mockResolvedValue(() => undefined);
-    vi.mocked(invoke).mockImplementation(async (command) => {
-      if (command === "get_today_dashboard") {
-        dashboardRequests += 1;
-        return {
-          timeline: dashboardRequests === 1 ? [] : [{
-            id: "retry-segment",
-            startedAtMs: observedAtMs - 60_000,
-            endedAtMs: observedAtMs,
-            app: "Terminal",
-            appPath: "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal",
-            title: "Local test",
-            category: "creation_development",
-            videoPurpose: "unknown",
-            confidence: 0.9,
-            source: "rule",
-            reason: "test",
-            modelVersion: "test-v1",
-            needsReview: false,
-          }],
-          totals: { monitoredSeconds: 60, activeSeconds: 60, idleSeconds: 0, learningSeconds: 60, categorySeconds: { creation_development: 60 } },
-          workLedger: { startMs: 0, endMs: 0, projects: [], tasks: [] },
-        };
-      }
-      return desktopCommandResult(command);
-    });
-    const rootElement = document.getElementById("root") as unknown as HTMLDivElement;
-    const root = createRoot(rootElement);
-
-    try {
-      await act(async () => {
-        root.render(<App initialSegments={[]} />);
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-      expect(dashboardRequests).toBe(1);
-
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(60_000);
-      });
-
-      expect(dashboardRequests).toBe(2);
-      expect(rootElement.textContent).toContain("活跃1 分钟");
-    } finally {
-      await act(async () => root.unmount());
-      vi.useRealTimers();
-    }
-  });
-
-  it("periodically reconciles today's dashboard when activity events are missed", async () => {
-    vi.useFakeTimers();
-    const { document } = installDesktopWindow();
-    let dashboardRequests = 0;
-    const today = new Date().toLocaleDateString("sv-SE");
-    const segmentStartMs = new Date(`${today}T01:00:00`).getTime();
-    vi.mocked(listen).mockResolvedValue(() => undefined);
-    vi.mocked(invoke).mockImplementation(async (command) => {
-      if (command === "get_today_dashboard") {
-        dashboardRequests += 1;
-        const activeMinutes = dashboardRequests === 1 ? 162 : 181;
-        return {
-          timeline: [{
-            id: "periodically-refreshed-segment",
-            startedAtMs: segmentStartMs,
-            endedAtMs: segmentStartMs + activeMinutes * 60_000,
-            app: "Cursor",
-            appPath: "/Applications/Cursor.app/Contents/MacOS/Cursor",
-            title: "Live activity",
-            category: "creation_development",
-            videoPurpose: "unknown",
-            confidence: 0.9,
-            source: "rule",
-            reason: "test",
-            modelVersion: "test-v1",
-            needsReview: false,
-          }],
-          totals: {
-            monitoredSeconds: activeMinutes * 60,
-            activeSeconds: activeMinutes * 60,
-            idleSeconds: 0,
-            learningSeconds: activeMinutes * 60,
-            categorySeconds: { creation_development: activeMinutes * 60 },
-          },
-          workLedger: { startMs: 0, endMs: 0, projects: [], tasks: [] },
-        };
-      }
-      return desktopCommandResult(command);
-    });
-    const rootElement = document.getElementById("root") as unknown as HTMLDivElement;
-    const root = createRoot(rootElement);
-
-    try {
-      await act(async () => {
-        root.render(<App initialSegments={[]} />);
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-      expect(dashboardRequests).toBe(1);
-      expect(rootElement.textContent).toContain("活跃2 小时 42 分钟");
-
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(60_000);
-      });
-
-      expect(dashboardRequests).toBe(2);
-      expect(rootElement.textContent).toContain("活跃3 小时 1 分钟");
-    } finally {
-      await act(async () => root.unmount());
-      vi.useRealTimers();
-    }
-  });
-
-  it("rolls a dashboard following today forward when the app regains focus after midnight", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-12T23:59:30"));
-    const { document, window } = installDesktopWindow();
-    let dashboardRequests = 0;
-    const nextDayDashboard = deferred<unknown>();
-    vi.mocked(listen).mockResolvedValue(() => undefined);
-    vi.mocked(invoke).mockImplementation(async (command) => {
-      if (command === "get_today_dashboard") {
-        dashboardRequests += 1;
-        if (dashboardRequests > 1) return nextDayDashboard.promise;
-        return {
-          timeline: [],
-          totals: { monitoredSeconds: 1_800, activeSeconds: 1_800, idleSeconds: 0, learningSeconds: 0, categorySeconds: { social: 1_800 } },
-          workLedger: { startMs: 0, endMs: 0, projects: [], tasks: [] },
-          activityComposition: {
-            all: { totalSeconds: 1_800, items: [{ key: "social", category: "social", videoPurpose: null, seconds: 1_800, share: 1, meaningfulReason: "excluded" }] },
-            meaningful: { totalSeconds: 0, items: [] },
-          },
-        };
-      }
-      return desktopCommandResult(command);
-    });
-    const rootElement = document.getElementById("root") as unknown as HTMLDivElement;
-    const root = createRoot(rootElement);
-
-    try {
-      await act(async () => {
-        root.render(<App initialSegments={[]} />);
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-      expect(rootElement.querySelector<HTMLInputElement>('input[aria-label="选择日期"]')?.value).toBe("2026-08-12");
-      expect(dashboardRequests).toBe(1);
-      expect(rootElement.querySelector(".distribution-panel")?.textContent).toContain("社交通讯");
-
-      vi.setSystemTime(new Date("2026-08-13T00:01:00"));
-      await act(async () => {
-        window.dispatchEvent(new window.Event("focus"));
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-
-      expect(rootElement.querySelector<HTMLInputElement>('input[aria-label="选择日期"]')?.value).toBe("2026-08-13");
-      expect(dashboardRequests).toBe(2);
-      expect(rootElement.querySelector(".distribution-panel")?.textContent).not.toContain("社交通讯");
-
-      nextDayDashboard.resolve(desktopCommandResult("get_today_dashboard"));
-      await act(async () => {
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-    } finally {
-      nextDayDashboard.resolve(desktopCommandResult("get_today_dashboard"));
-      await act(async () => root.unmount());
-      vi.useRealTimers();
-    }
-  });
-
   it("cleans up an AI health subscription that resolves after unmount", async () => {
     const { document } = installDesktopWindow();
     const cachedHealth = deferred<AiConnectionHealth>();
@@ -1586,95 +1271,6 @@ describe("App", () => {
       expect(aiSection).not.toBeNull();
       expect(document.activeElement).toBe(aiSection);
       expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
-    } finally {
-      await act(async () => root.unmount());
-    }
-  });
-
-  it("shows the saved idle threshold and rolls back a failed update", async () => {
-    const { document, window } = installDesktopWindow();
-    const settings = {
-      ...appSettings,
-      idleThresholdMinutes: 15,
-      aiAutomationNoticeVersion: 1,
-    };
-    vi.mocked(listen).mockResolvedValue(vi.fn());
-    vi.mocked(invoke).mockImplementation(async (command, args) => {
-      if (command === "get_settings") return settings;
-      if (command === "update_settings") {
-        const minutes = (args as { patch: { idleThresholdMinutes?: number } }).patch.idleThresholdMinutes;
-        if (minutes === 6) throw new Error("database unavailable");
-        if (minutes) settings.idleThresholdMinutes = minutes;
-        return { ...settings };
-      }
-      return desktopCommandResult(command);
-    });
-    const rootElement = document.getElementById("root") as unknown as HTMLDivElement;
-    const root = createRoot(rootElement);
-
-    try {
-      await act(async () => root.render(<App initialSegments={segments} />));
-      await act(async () => rootElement.querySelector<HTMLButtonElement>('button[aria-label="打开设置"]')
-        ?.dispatchEvent(new window.Event("click", { bubbles: true })));
-      await act(async () => undefined);
-
-      const threshold = rootElement.querySelector<HTMLSelectElement>('select[aria-label="不活跃阈值"]');
-      expect(threshold?.value).toBe("15");
-      let selectedValue = threshold?.value ?? "";
-      if (threshold) {
-        Object.defineProperty(threshold, "value", {
-          configurable: true,
-          get: () => selectedValue,
-          set: (value: string) => { selectedValue = value; },
-        });
-      }
-
-      await act(async () => {
-        selectedValue = "10";
-        threshold?.dispatchEvent(new window.Event("change", { bubbles: true }));
-      });
-      expect(threshold?.value).toBe("10");
-      expect(invoke).toHaveBeenCalledWith("update_settings", {
-        patch: { idleThresholdMinutes: 10 },
-      });
-
-      await act(async () => {
-        selectedValue = "6";
-        threshold?.dispatchEvent(new window.Event("change", { bubbles: true }));
-      });
-      if (threshold) Reflect.deleteProperty(threshold, "value");
-      expect(threshold?.value).toBe("10");
-      expect(rootElement.textContent).toContain("不活跃阈值保存失败");
-    } finally {
-      await act(async () => root.unmount());
-    }
-  });
-
-  it("shows collection channel diagnostics and local watcher credentials", async () => {
-    const { document, window } = installDesktopWindow();
-    vi.mocked(listen).mockResolvedValue(vi.fn());
-    vi.mocked(invoke).mockImplementation(async (command) => desktopCommandResult(command));
-    const rootElement = document.getElementById("root") as unknown as HTMLDivElement;
-    const root = createRoot(rootElement);
-
-    try {
-      await act(async () => root.render(<App initialSegments={segments} />));
-      const healthTab = [...rootElement.querySelectorAll<HTMLButtonElement>(".main-tabs button")]
-        .find((button) => button.textContent === "健康诊断");
-      await act(async () => healthTab?.dispatchEvent(new window.Event("click", { bubbles: true })));
-      await act(async () => undefined);
-
-      const diagnostics = rootElement.querySelector<HTMLElement>('[aria-label="采集健康诊断"]');
-      expect(diagnostics).not.toBeNull();
-      expect(diagnostics?.textContent).toContain("浏览器实时 watcher");
-      expect(diagnostics?.textContent).toContain("2 分钟");
-      expect(diagnostics?.textContent).toContain("4 个可信心跳切片");
-      expect(rootElement.querySelector<HTMLInputElement>("#browser-watcher-endpoint")?.value)
-        .toBe("http://127.0.0.1:27123/v1/heartbeat");
-      expect(rootElement.querySelector<HTMLInputElement>("#browser-watcher-token")?.value)
-        .toBe("local-test-token");
-      expect(invoke).toHaveBeenCalledWith("get_collection_health");
-      expect(rootElement.querySelector('[role="dialog"][aria-label="设置"]')).toBeNull();
     } finally {
       await act(async () => root.unmount());
     }

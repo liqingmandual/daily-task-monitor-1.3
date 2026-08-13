@@ -9,15 +9,15 @@
 ## 安装 1.3 独立版
 
 1. 打开项目的 [Releases](https://github.com/liqingmandual/daily-task-monitor-1.3/releases)。
-2. 下载 `Orbit-1.3.0-x64-setup.exe`。
+2. 下载 `DailyTaskMonitor-1.3.0-x64-setup.exe`。
 3. 在 Release 页面复制安装包的 SHA-256；也可以用以下命令计算本地文件哈希：
 
    ```powershell
-   Get-FileHash '.\Orbit-1.3.0-x64-setup.exe' -Algorithm SHA256
+   Get-FileHash '.\DailyTaskMonitor-1.3.0-x64-setup.exe' -Algorithm SHA256
    ```
 
 4. 双击安装包，按安装向导完成安装。
-5. 从开始菜单打开「Orbit」。
+5. 从开始菜单打开「每日任务监测系统 1.3 独立版」。
 
 安装包目前未进行商业代码签名，Windows SmartScreen 可能显示「Windows 已保护你的电脑」。确认文件来自本仓库且哈希一致后，可选择「更多信息」→「仍要运行」。
 
@@ -31,7 +31,7 @@
 - 凭据服务：`DailyTaskMonitorIndependent13`
 - 进程锁：`Local\DailyTaskMonitorDesktopIndependent13`
 
-因此它可以与其他版本并行安装，不会覆盖 TimeWheel 或 Orbit 的其他数据目录。
+因此它可以与其他版本并行安装，不会覆盖 TimeWheel 或每日任务监测系统的其他数据目录。
 
 ## 第一次启动
 

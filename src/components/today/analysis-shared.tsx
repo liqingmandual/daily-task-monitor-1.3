@@ -3,8 +3,10 @@ import * as echarts from "echarts/core";
 import { PieChart } from "echarts/charts";
 import { TooltipComponent } from "echarts/components";
 import { SVGRenderer } from "echarts/renderers";
-import { AppIcon } from "../AppIcon";
-import { fallbackAppIdentity } from "../../lib/app-identity";
+import { AppWindow } from "lucide-react";
+import { FaEdge } from "react-icons/fa6";
+import { SiGooglechrome, SiObsidian, SiQq, SiWechat } from "react-icons/si";
+import { VscCode } from "react-icons/vsc";
 import { formatChartDuration, formatDonutTooltip } from "../../lib/presentation";
 import { categoryMeta } from "./analysis-meta";
 
@@ -14,44 +16,6 @@ echarts.use([PieChart, TooltipComponent, SVGRenderer]);
 
 export type DonutItem = { key: string; name: string; value: number; color: string };
 export type DonutSelection = DonutItem & { percent: number };
-
-export const DONUT_SHARE_REFRESH_THRESHOLD = 0.005;
-export const DONUT_FORCE_REFRESH_INTERVAL_MS = 5 * 60_000;
-
-function donutShares(items: DonutItem[]): Map<string, number> {
-  const total = items.reduce((sum, item) => sum + Math.max(0, item.value), 0);
-  return new Map(items.map((item) => [item.key, total ? Math.max(0, item.value) / total : 0]));
-}
-
-export function shouldRefreshDonut(
-  previous: DonutItem[],
-  next: DonutItem[],
-  elapsedMs: number,
-): boolean {
-  if (elapsedMs >= DONUT_FORCE_REFRESH_INTERVAL_MS) return true;
-  if (previous.length !== next.length) return true;
-  const previousByKey = new Map(previous.map((item) => [item.key, item]));
-  if (next.some((item) => {
-    const prior = previousByKey.get(item.key);
-    return !prior || prior.name !== item.name || prior.color !== item.color;
-  })) return true;
-  const previousShares = donutShares(previous);
-  const nextShares = donutShares(next);
-  const totalVariation = next.reduce((difference, item) => (
-    difference
-      + Math.abs((nextShares.get(item.key) ?? 0) - (previousShares.get(item.key) ?? 0))
-  ), 0) / 2;
-  return totalVariation >= DONUT_SHARE_REFRESH_THRESHOLD;
-}
-
-function donutSeriesData(items: DonutItem[]) {
-  return items.map((item) => ({
-    id: item.key,
-    name: item.name,
-    value: item.value,
-    itemStyle: { color: item.color },
-  }));
-}
 
 export function PanelHeading({ eyebrow, title, icon }: { eyebrow: string; title: string; icon: ReactNode }) {
   return <div className="panel-heading"><div><span>{eyebrow}</span><h2>{title}</h2></div><i>{icon}</i></div>;
@@ -74,16 +38,12 @@ export function DonutChart({
 }) {
   const chartRef = useRef<HTMLDivElement>(null);
   const chartInstanceRef = useRef<echarts.ECharts | null>(null);
-  const itemsRef = useRef(items);
-  const renderedItemsRef = useRef<DonutItem[]>([]);
-  const lastChartRefreshAtRef = useRef(0);
   const keyboardIndexRef = useRef(0);
   const onSelectRef = useRef(onSelect);
   const onPreviewRef = useRef(onPreview);
   const [keyboardIndex, setKeyboardIndex] = useState(0);
   onSelectRef.current = onSelect;
   onPreviewRef.current = onPreview;
-  itemsRef.current = items;
 
   const selectionFor = (item: DonutItem, percent: number): DonutSelection => ({ ...item, percent });
 
@@ -95,83 +55,52 @@ export function DonutChart({
 
   useEffect(() => {
     if (!chartRef.current) return;
-    const element = chartRef.current;
-    const chartWindow = element.ownerDocument.defaultView;
+    const chartWindow = chartRef.current.ownerDocument.defaultView;
     if (!chartWindow || typeof chartWindow.getComputedStyle !== "function") return;
-    let cancelled = false;
-    let chart: echarts.ECharts | null = null;
-    let forceRefreshTimer: number | undefined;
-    const resize = () => chart?.resize();
-    queueMicrotask(() => {
-      if (cancelled) return;
-      chart = echarts.init(element, undefined, { renderer: "svg" });
-      chartInstanceRef.current = chart;
-      const initialItems = itemsRef.current;
-      renderedItemsRef.current = initialItems;
-      lastChartRefreshAtRef.current = Date.now();
-      chart.setOption({
-        animationDuration: 280,
-        animationDurationUpdate: 280,
-        tooltip: {
-          trigger: "item",
-          appendTo: "body",
-          className: "chart-hover-card",
-          confine: true,
-          backgroundColor: "rgba(19, 30, 49, .96)",
-          borderColor: "rgba(129, 164, 222, .42)",
-          textStyle: { color: "#eaf4ff", fontSize: 12 },
-          extraCssText: "pointer-events:none;border-radius:8px;box-shadow:0 18px 42px rgba(15,23,42,.32);backdrop-filter:blur(12px);",
-          formatter: (params: { name: string; value: number; percent: number }) =>
-            formatDonutTooltip(params.name, params.value, params.percent).replace("\n", "<br/>") ,
-        },
-        series: [{
-          type: "pie",
-          radius: ["62%", "84%"],
-          center: ["50%", "50%"],
-          padAngle: 2,
-          itemStyle: { borderRadius: 4, borderColor: "transparent", borderWidth: 2 },
-          label: { show: false },
-          data: donutSeriesData(initialItems),
-        }],
-      });
-      const itemFor = (params: unknown) => {
-        const event = params as { data?: { id?: string } | null; percent?: number };
-        const item = renderedItemsRef.current.find((candidate) => candidate.key === event.data?.id);
-        return item ? selectionFor(item, event.percent ?? 0) : null;
-      };
-      chart.on("click", (params) => {
-        const item = itemFor(params);
-        if (item) onSelectRef.current(item);
-      });
-      chart.on("mouseover", (params) => onPreviewRef.current?.(itemFor(params)));
-      chart.on("globalout", () => onPreviewRef.current?.(null));
-      chartWindow.addEventListener("resize", resize);
-      forceRefreshTimer = chartWindow.setInterval(() => {
-        const latestItems = itemsRef.current;
-        chart?.setOption({ series: [{ data: donutSeriesData(latestItems) }] });
-        renderedItemsRef.current = latestItems;
-        lastChartRefreshAtRef.current = Date.now();
-      }, DONUT_FORCE_REFRESH_INTERVAL_MS);
+    const chart = echarts.init(chartRef.current, undefined, { renderer: "svg" });
+    chartInstanceRef.current = chart;
+    chart.setOption({
+      animationDuration: 280,
+      tooltip: {
+        trigger: "item",
+        appendTo: "body",
+        className: "chart-hover-card",
+        confine: true,
+        backgroundColor: "rgba(19, 30, 49, .96)",
+        borderColor: "rgba(129, 164, 222, .42)",
+        textStyle: { color: "#eaf4ff", fontSize: 12 },
+        extraCssText: "pointer-events:none;border-radius:8px;box-shadow:0 18px 42px rgba(15,23,42,.32);backdrop-filter:blur(12px);",
+        formatter: (params: { name: string; value: number; percent: number }) =>
+          formatDonutTooltip(params.name, params.value, params.percent).replace("\n", "<br/>") ,
+      },
+      series: [{
+        type: "pie",
+        radius: ["62%", "84%"],
+        center: ["50%", "50%"],
+        padAngle: 2,
+        itemStyle: { borderRadius: 4, borderColor: "#fff", borderWidth: 2 },
+        label: { show: false },
+        data: items.map((item) => ({ id: item.key, name: item.name, value: item.value, itemStyle: { color: item.color } })),
+      }],
     });
-    return () => {
-      cancelled = true;
-      chartWindow.removeEventListener("resize", resize);
-      if (forceRefreshTimer !== undefined) chartWindow.clearInterval(forceRefreshTimer);
-      chartInstanceRef.current = null;
-      chart?.dispose();
+    const itemFor = (params: unknown) => {
+      const event = params as { data?: { id?: string } | null; percent?: number };
+      const item = items.find((candidate) => candidate.key === event.data?.id);
+      return item ? selectionFor(item, event.percent ?? 0) : null;
     };
-  }, []);
-
-  useEffect(() => {
-    const chart = chartInstanceRef.current;
-    if (!chart || !shouldRefreshDonut(
-      renderedItemsRef.current,
-      items,
-      Date.now() - lastChartRefreshAtRef.current,
-    )) return;
-    chart.setOption({ series: [{ data: donutSeriesData(items) }] });
-    renderedItemsRef.current = items;
-    lastChartRefreshAtRef.current = Date.now();
+    chart.on("click", (params) => {
+      const item = itemFor(params);
+      if (item) onSelectRef.current(item);
+    });
+    chart.on("mouseover", (params) => onPreviewRef.current?.(itemFor(params)));
+    chart.on("globalout", () => onPreviewRef.current?.(null));
+    const resize = () => chart.resize();
+    window.addEventListener("resize", resize);
+    return () => {
+      window.removeEventListener("resize", resize);
+      chartInstanceRef.current = null;
+      chart.dispose();
+    };
   }, [items]);
 
   const selectByKeyboard = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -201,7 +130,15 @@ export function DonutChart({
 }
 
 export function AppLogo({ name }: { name: string }) {
-  return <AppIcon identity={fallbackAppIdentity(name)} />;
+  const normalized = name.toLowerCase();
+  const props = { size: 18, "aria-hidden": true };
+  if (normalized.includes("chrome")) return <span className="app-logo chrome" data-app-icon="chrome"><SiGooglechrome {...props} /></span>;
+  if (normalized.includes("edge")) return <span className="app-logo edge" data-app-icon="edge"><FaEdge {...props} /></span>;
+  if (normalized.includes("code") || normalized.includes("codex")) return <span className="app-logo code" data-app-icon="code"><VscCode {...props} /></span>;
+  if (normalized.includes("obsidian")) return <span className="app-logo obsidian" data-app-icon="obsidian"><SiObsidian {...props} /></span>;
+  if (normalized.includes("wechat") || normalized.includes("weixin")) return <span className="app-logo wechat" data-app-icon="wechat"><SiWechat {...props} /></span>;
+  if (normalized === "qq" || normalized.includes("tencentqq")) return <span className="app-logo qq" data-app-icon="qq"><SiQq {...props} /></span>;
+  return <span className="app-logo fallback" data-app-icon="generic"><AppWindow {...props} /></span>;
 }
 
 export function formatPreview(item: DonutSelection | null) {

@@ -20,7 +20,6 @@ use crate::domain::{
     ActivityCategory, ActivityCompositions, ActivityScope, InactivityReason, MeaningfulReason,
     VideoPurpose,
 };
-use crate::segment_overlap::canonicalize_activity_segments;
 use crate::work_ledger::WorkLedgerRepository;
 
 const MILLIS_PER_MINUTE: i64 = 60_000;
@@ -923,7 +922,7 @@ fn load_range(
             .last()
             .expect("validated range has an end boundary"),
     )?;
-    let mut work_ledger_facts = WorkLedgerRepository::new(database).range_facts(
+    let work_ledger_facts = WorkLedgerRepository::new(database).range_facts(
         boundaries[0],
         *boundaries
             .last()
@@ -943,40 +942,7 @@ fn load_range(
             )
         });
     }
-    facts.segments = canonicalize_activity_segments(
-        &facts.segments,
-        boundaries[0],
-        *boundaries
-            .last()
-            .expect("validated range has an end boundary"),
-    );
-    align_linked_activity_facts(&mut work_ledger_facts, &facts.segments);
     aggregate_range(selection, facts, work_ledger_facts, boundaries)
-}
-
-fn align_linked_activity_facts(
-    work_ledger_facts: &mut WorkLedgerRangeFacts,
-    canonical_segments: &[ActivitySegmentRecord],
-) {
-    let mut segments_by_id = BTreeMap::<&str, Vec<&ActivitySegmentRecord>>::new();
-    for segment in canonical_segments {
-        segments_by_id
-            .entry(segment.id.as_str())
-            .or_default()
-            .push(segment);
-    }
-
-    let mut aligned_facts = Vec::new();
-    for fact in std::mem::take(&mut work_ledger_facts.activities) {
-        if let Some(segments) = segments_by_id.get(fact.segment.id.as_str()) {
-            for segment in segments {
-                let mut aligned = fact.clone();
-                aligned.segment = (*segment).clone();
-                aligned_facts.push(aligned);
-            }
-        }
-    }
-    work_ledger_facts.activities = aligned_facts;
 }
 
 fn aggregate_range(
@@ -1218,10 +1184,7 @@ fn build_activity_composition_for_day_indices(
         )
         .into_iter()
         .map(move |piece| ActivityCompositionSlice {
-            scope_key: format!(
-                "activity:{}:{}:{}:{}",
-                segment.id, piece.day_index, piece.started_at_ms, piece.ended_at_ms
-            ),
+            scope_key: format!("activity:{}:{}", segment.id, piece.day_index),
             category: segment.category,
             video_purpose: segment.video_purpose,
             seconds: piece.seconds,
@@ -1457,10 +1420,7 @@ fn build_bucket_drilldown(
             &aggregate.boundaries_ms,
             &selected_day_indices,
         ) {
-            let scope = format!(
-                "activity:{}:{}:{}:{}",
-                segment.id, piece.day_index, piece.started_at_ms, piece.ended_at_ms
-            );
+            let scope = format!("activity:{}:{}", segment.id, piece.day_index);
             if distribution_scopes.insert(scope) {
                 *app_seconds.entry(segment.app.clone()).or_default() += piece.seconds;
                 *category_seconds
@@ -1598,10 +1558,7 @@ fn add_unlinked_activity_row(
 ) {
     let category = activity_category_key(segment.category);
     raw_rows.push(TrendRawRow {
-        row_id: format!(
-            "{bucket_id}.activity.{}.unlinked.{}.{}.{}",
-            segment.id, piece.started_at_ms, piece.ended_at_ms, piece_index
-        ),
+        row_id: format!("{bucket_id}.activity.{}.unlinked.{piece_index}", segment.id),
         bucket_id: bucket_id.into(),
         evidence_kind: TrendRawEvidenceKind::Activity,
         evidence_id: segment.id.clone(),
@@ -1675,8 +1632,8 @@ fn add_activity_drilldown_piece(
     }
     raw_rows.push(TrendRawRow {
         row_id: format!(
-            "{bucket_id}.activity.{}.{}.{}.{}.{}",
-            fact.segment.id, fact.task_id, piece.started_at_ms, piece.ended_at_ms, piece_index
+            "{bucket_id}.activity.{}.{}.{}",
+            fact.segment.id, fact.task_id, piece_index
         ),
         bucket_id: bucket_id.into(),
         evidence_kind: TrendRawEvidenceKind::Activity,

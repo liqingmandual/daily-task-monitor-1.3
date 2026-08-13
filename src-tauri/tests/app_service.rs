@@ -142,33 +142,6 @@ fn one_day_trend_boundaries() -> (Vec<i64>, Vec<i64>) {
     (vec![0, DAY_MS], vec![-DAY_MS, 0])
 }
 
-#[test]
-fn legacy_trends_count_overlapping_collectors_once() {
-    const HOUR_MS: i64 = 3_600_000;
-    let database = Database::open_in_memory().unwrap();
-    database
-        .insert_segment(&segment("idle-a", ActivityCategory::Idle, 0, 4 * HOUR_MS))
-        .unwrap();
-    database
-        .insert_segment(&segment("idle-b", ActivityCategory::Idle, 0, 4 * HOUR_MS))
-        .unwrap();
-    database
-        .insert_segment(&segment(
-            "active",
-            ActivityCategory::Research,
-            HOUR_MS,
-            2 * HOUR_MS,
-        ))
-        .unwrap();
-
-    let payload = one_day_trend_payload(&AppService::new(database));
-
-    assert_eq!(payload.summary.monitored_seconds, 4 * 3_600);
-    assert_eq!(payload.summary.active_seconds, 3_600);
-    assert_eq!(payload.summary.idle_seconds, 3 * 3_600);
-    assert_eq!(payload.days[0].monitored_seconds, 4 * 3_600);
-}
-
 fn execution_snapshot(provider_id: &str, model: &str, created_at_ms: i64) -> AiExecutionSnapshot {
     AiExecutionSnapshot {
         execution_mode: AiExecutionMode::ApiKey,
@@ -697,51 +670,6 @@ fn dashboard_snapshot_contains_totals_and_timeline() {
 }
 
 #[test]
-fn dashboard_composition_counts_overlapping_collectors_only_once() {
-    let database = Database::open_in_memory().unwrap();
-    database
-        .insert_segment(&segment("idle-a", ActivityCategory::Idle, 0, 14_400_000))
-        .unwrap();
-    database
-        .insert_segment(&segment("idle-b", ActivityCategory::Idle, 0, 14_400_000))
-        .unwrap();
-    database
-        .insert_segment(&segment(
-            "research",
-            ActivityCategory::Research,
-            3_600_000,
-            7_200_000,
-        ))
-        .unwrap();
-
-    let service = AppService::new(database);
-    let snapshot = service.get_dashboard(0, 14_400_000).unwrap();
-
-    assert_eq!(snapshot.timeline.len(), 3);
-    assert_eq!(snapshot.activity_composition.all.total_seconds, 4 * 3_600);
-    assert_eq!(
-        snapshot.activity_composition.meaningful.total_seconds,
-        3_600
-    );
-    assert!(
-        snapshot
-            .activity_composition
-            .all
-            .items
-            .iter()
-            .any(|item| { item.category == ActivityCategory::Idle && item.seconds == 3 * 3_600 })
-    );
-    assert!(
-        snapshot
-            .activity_composition
-            .all
-            .items
-            .iter()
-            .any(|item| { item.category == ActivityCategory::Research && item.seconds == 3_600 })
-    );
-}
-
-#[test]
 fn settings_patch_preserves_unspecified_values() {
     let service = AppService::new(Database::open_in_memory().unwrap());
     service
@@ -760,7 +688,6 @@ fn settings_patch_preserves_unspecified_values() {
             excluded_apps: None,
             excluded_domains: None,
             ui_theme: None,
-            ui_font: None,
             experimental_knowledge_graph_enabled: None,
         })
         .unwrap();
@@ -915,7 +842,6 @@ fn ui_theme_defaults_to_classic_workbench() {
 fn allowed_ui_theme_patches_are_persisted() {
     let service = AppService::new(Database::open_in_memory().unwrap());
     for (theme, serialized) in [
-        (UiTheme::MossNocturne, "moss-nocturne"),
         (UiTheme::ClassicWorkbench, "classic-workbench"),
         (UiTheme::MoonGlass, "moon-glass"),
         (UiTheme::SoftPaper, "soft-paper"),
@@ -1123,7 +1049,6 @@ fn manual_learning_video_rule_preserves_its_video_purpose() {
             ActivityCategory::VideoInput,
             VideoPurpose::Learning,
             "Course video",
-            true,
         )
         .unwrap();
 
@@ -1155,7 +1080,6 @@ fn manual_classification_overrides_the_segment_and_marks_manual_source() {
             ActivityCategory::Research,
             VideoPurpose::Unknown,
             "User correction",
-            true,
         )
         .unwrap();
 
@@ -1176,72 +1100,6 @@ fn manual_classification_overrides_the_segment_and_marks_manual_source() {
     });
     assert_eq!(reapplied.category, ActivityCategory::Research);
     assert_eq!(reapplied.source, ClassificationSource::Manual);
-}
-
-#[test]
-fn manual_classification_rule_is_previewed_and_requires_explicit_acceptance() {
-    let database = Database::open_in_memory().unwrap();
-    database
-        .insert_segment(&segment(
-            "preview-one",
-            ActivityCategory::Pending,
-            1_000,
-            61_000,
-        ))
-        .unwrap();
-    database
-        .insert_segment(&segment(
-            "preview-two",
-            ActivityCategory::Pending,
-            62_000,
-            122_000,
-        ))
-        .unwrap();
-    let service = AppService::new(database);
-
-    let preview = service
-        .preview_manual_classification_rule(
-            "preview-one",
-            ActivityCategory::Research,
-            VideoPurpose::Unknown,
-        )
-        .unwrap()
-        .unwrap();
-    assert_eq!(preview.matcher_kind, "app_title");
-    assert_eq!(preview.app, "Codex");
-    assert_eq!(preview.title, "Desktop rewrite");
-    assert_eq!(preview.historical_match_count, 2);
-    assert!(preview.applies_to_future_matches_only);
-
-    service
-        .save_manual_classification(
-            "preview-one",
-            ActivityCategory::Research,
-            VideoPurpose::Unknown,
-            "User correction",
-            false,
-        )
-        .unwrap();
-    assert!(service.database().list_manual_rules().unwrap().is_empty());
-    let current = service.get_dashboard(0, 130_000).unwrap();
-    assert_eq!(
-        current
-            .timeline
-            .iter()
-            .find(|segment| segment.id == "preview-one")
-            .unwrap()
-            .category,
-        ActivityCategory::Research
-    );
-    assert_eq!(
-        current
-            .timeline
-            .iter()
-            .find(|segment| segment.id == "preview-two")
-            .unwrap()
-            .category,
-        ActivityCategory::Pending
-    );
 }
 
 #[test]
@@ -1299,52 +1157,6 @@ fn daily_analysis_queue_deduplicates_the_same_evidence_hash() {
 
     assert_eq!(first, second);
     assert_eq!(service.database().ai_job_count().unwrap(), 1);
-}
-
-#[test]
-fn daily_analysis_queue_replaces_pending_evidence_for_the_same_day_and_scope() {
-    let database = Database::open_in_memory().unwrap();
-    database
-        .insert_segment(&segment(
-            "dev-initial",
-            ActivityCategory::CreationDevelopment,
-            1_000,
-            61_000,
-        ))
-        .unwrap();
-    let service = AppService::new(database);
-    let execution = execution_snapshot("openai", "gpt-frozen", 5_000);
-    let first = service
-        .queue_daily_analysis("2026-07-12", 0, 180_000, 5_000, Some(&execution))
-        .unwrap()
-        .unwrap();
-    let initial_hash = service
-        .database()
-        .get_ai_job(&first)
-        .unwrap()
-        .unwrap()
-        .execution
-        .evidence_hash;
-
-    service
-        .database()
-        .insert_segment(&segment(
-            "dev-later",
-            ActivityCategory::Research,
-            61_000,
-            121_000,
-        ))
-        .unwrap();
-    let second = service
-        .queue_daily_analysis("2026-07-12", 0, 180_000, 6_000, Some(&execution))
-        .unwrap()
-        .unwrap();
-    let updated = service.database().get_ai_job(&second).unwrap().unwrap();
-
-    assert_eq!(first, second);
-    assert_eq!(service.database().ai_job_count().unwrap(), 1);
-    assert_ne!(updated.execution.evidence_hash, initial_hash);
-    assert_eq!(updated.execution.created_at_ms, 6_000);
 }
 
 #[test]
