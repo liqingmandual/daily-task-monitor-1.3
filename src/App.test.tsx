@@ -1337,6 +1337,65 @@ describe("App", () => {
     }
   });
 
+  it("rolls a dashboard following today forward when the app regains focus after midnight", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-12T23:59:30"));
+    const { document, window } = installDesktopWindow();
+    let dashboardRequests = 0;
+    const nextDayDashboard = deferred<unknown>();
+    vi.mocked(listen).mockResolvedValue(() => undefined);
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_today_dashboard") {
+        dashboardRequests += 1;
+        if (dashboardRequests > 1) return nextDayDashboard.promise;
+        return {
+          timeline: [],
+          totals: { monitoredSeconds: 1_800, activeSeconds: 1_800, idleSeconds: 0, learningSeconds: 0, categorySeconds: { social: 1_800 } },
+          workLedger: { startMs: 0, endMs: 0, projects: [], tasks: [] },
+          activityComposition: {
+            all: { totalSeconds: 1_800, items: [{ key: "social", category: "social", videoPurpose: null, seconds: 1_800, share: 1, meaningfulReason: "excluded" }] },
+            meaningful: { totalSeconds: 0, items: [] },
+          },
+        };
+      }
+      return desktopCommandResult(command);
+    });
+    const rootElement = document.getElementById("root") as unknown as HTMLDivElement;
+    const root = createRoot(rootElement);
+
+    try {
+      await act(async () => {
+        root.render(<App initialSegments={[]} />);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(rootElement.querySelector<HTMLInputElement>('input[aria-label="选择日期"]')?.value).toBe("2026-08-12");
+      expect(dashboardRequests).toBe(1);
+      expect(rootElement.querySelector(".distribution-panel")?.textContent).toContain("社交通讯");
+
+      vi.setSystemTime(new Date("2026-08-13T00:01:00"));
+      await act(async () => {
+        window.dispatchEvent(new window.Event("focus"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(rootElement.querySelector<HTMLInputElement>('input[aria-label="选择日期"]')?.value).toBe("2026-08-13");
+      expect(dashboardRequests).toBe(2);
+      expect(rootElement.querySelector(".distribution-panel")?.textContent).not.toContain("社交通讯");
+
+      nextDayDashboard.resolve(desktopCommandResult("get_today_dashboard"));
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+    } finally {
+      nextDayDashboard.resolve(desktopCommandResult("get_today_dashboard"));
+      await act(async () => root.unmount());
+      vi.useRealTimers();
+    }
+  });
+
   it("cleans up an AI health subscription that resolves after unmount", async () => {
     const { document } = installDesktopWindow();
     const cachedHealth = deferred<AiConnectionHealth>();

@@ -18,8 +18,10 @@ therefore not inferred in this record.
 
 Concurrent instances are intentionally allowed in the current local
 multi-agent development scope. Duplicate-instance prevention is therefore not
-a P0 gate. Ordinary acceptance runs should still use one collector per
-database so the resulting evidence has one clear authority.
+a P0 gate. Post-acceptance hardening on 2026-08-13 added a SQLite lease so
+concurrent interfaces now share one collector authority per database, plus
+non-destructive overlap normalization for existing dashboard and trend data.
+The policy and metric semantics are recorded in `docs/DATA_INTEGRITY.md`.
 
 No captured titles, URLs, executable paths, or watcher tokens are included.
 

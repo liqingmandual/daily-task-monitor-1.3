@@ -20,6 +20,7 @@ use crate::domain::{
     TrendDataQuality, TrendDay, TrendPayload, TrendRange, TrendSummary, VideoPurpose,
 };
 use crate::knowledge_graph::{KnowledgeGraphFilters, KnowledgeGraphPayload, build_knowledge_graph};
+use crate::segment_overlap::canonicalize_activity_segments;
 use crate::trend_analysis::{
     TrendResearchAnalysis, TrendResearchJobPayload, build_trend_research_input,
     build_trend_research_job_payload_scoped, limitations_only_analysis, unavailable_analysis,
@@ -376,7 +377,6 @@ impl AppService {
 
     pub fn get_dashboard(&self, start_ms: i64, end_ms: i64) -> Result<DashboardSnapshot> {
         let timeline = self.database.list_segments(start_ms, end_ms)?;
-        let clipped_segments = self.database.list_clipped_segments(start_ms, end_ms)?;
         let work_ledger_facts = self
             .database
             .load_work_ledger_range_facts(start_ms, end_ms)?;
@@ -385,16 +385,12 @@ impl AppService {
             .iter()
             .map(|fact| fact.segment.id.as_str())
             .collect::<BTreeSet<_>>();
-        let activity_composition =
-            build_activity_compositions(clipped_segments.iter().map(|segment| {
-                ActivityCompositionSlice {
-                    scope_key: segment.id.clone(),
-                    category: segment.category,
-                    video_purpose: segment.video_purpose,
-                    seconds: segment.ended_at_ms.saturating_sub(segment.started_at_ms) / 1_000,
-                    workflow_linked: linked_activity_ids.contains(segment.id.as_str()),
-                }
-            }));
+        let activity_composition = build_activity_compositions(non_overlapping_activity_slices(
+            &timeline,
+            &linked_activity_ids,
+            start_ms,
+            end_ms,
+        ));
         let work_ledger = self.database.work_ledger_range_rollup_from_facts(
             start_ms,
             end_ms,
@@ -569,24 +565,23 @@ impl AppService {
         activity_scope: ActivityScope,
     ) -> Result<Vec<ActivitySegmentRecord>> {
         let mut segments = self.database.list_clipped_segments(start_ms, end_ms)?;
-        if activity_scope == ActivityScope::All {
-            return Ok(segments);
+        if activity_scope == ActivityScope::Meaningful {
+            let linked_activity_ids = self
+                .database
+                .load_work_ledger_range_facts(start_ms, end_ms)?
+                .activities
+                .into_iter()
+                .map(|fact| fact.segment.id)
+                .collect::<BTreeSet<_>>();
+            segments.retain(|segment| {
+                activity_is_meaningful(
+                    segment.category,
+                    segment.video_purpose,
+                    linked_activity_ids.contains(&segment.id),
+                )
+            });
         }
-        let linked_activity_ids = self
-            .database
-            .load_work_ledger_range_facts(start_ms, end_ms)?
-            .activities
-            .into_iter()
-            .map(|fact| fact.segment.id)
-            .collect::<BTreeSet<_>>();
-        segments.retain(|segment| {
-            activity_is_meaningful(
-                segment.category,
-                segment.video_purpose,
-                linked_activity_ids.contains(&segment.id),
-            )
-        });
-        Ok(segments)
+        Ok(canonicalize_activity_segments(&segments, start_ms, end_ms))
     }
 
     pub fn get_trend_workbench(
@@ -1451,7 +1446,7 @@ impl AppService {
         } else {
             BTreeSet::new()
         };
-        let segments: Vec<_> = all_segments
+        let filtered_segments: Vec<_> = all_segments
             .into_iter()
             .filter(|segment| {
                 activity_scope == ActivityScope::All
@@ -1462,6 +1457,7 @@ impl AppService {
                     )
             })
             .collect();
+        let segments = canonicalize_activity_segments(&filtered_segments, start_ms, end_ms);
         let totals = if activity_scope == ActivityScope::All {
             self.database.dashboard_totals(start_ms, end_ms)?
         } else {
@@ -1541,6 +1537,27 @@ impl AppService {
         evidence.evidence_hash = format!("{:x}", Sha256::digest(canonical));
         Ok(evidence)
     }
+}
+
+fn non_overlapping_activity_slices(
+    timeline: &[ActivitySegmentRecord],
+    linked_activity_ids: &BTreeSet<&str>,
+    start_ms: i64,
+    end_ms: i64,
+) -> Vec<ActivityCompositionSlice> {
+    canonicalize_activity_segments(timeline, start_ms, end_ms)
+        .into_iter()
+        .map(|segment| ActivityCompositionSlice {
+            scope_key: format!(
+                "{}:{}:{}",
+                segment.id, segment.started_at_ms, segment.ended_at_ms
+            ),
+            category: segment.category,
+            video_purpose: segment.video_purpose,
+            seconds: segment.ended_at_ms.saturating_sub(segment.started_at_ms) / 1_000,
+            workflow_linked: linked_activity_ids.contains(segment.id.as_str()),
+        })
+        .collect()
 }
 
 #[derive(Serialize)]

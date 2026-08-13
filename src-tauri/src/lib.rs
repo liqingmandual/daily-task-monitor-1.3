@@ -18,6 +18,7 @@ pub mod legacy;
 pub mod monitor;
 pub mod monitor_continuity;
 pub mod report;
+pub mod segment_overlap;
 pub mod trend_analysis;
 pub mod trends;
 pub mod work_ledger;

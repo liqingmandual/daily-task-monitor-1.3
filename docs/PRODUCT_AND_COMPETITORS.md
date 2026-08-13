@@ -85,6 +85,10 @@ Reference: <https://timingapp.com/help/faq>
 ### P0: trustworthy capture
 
 - [x] Keep platform collectors behind one `MonitorSample` contract.
+- [x] Enforce one collector authority per SQLite database while allowing
+  concurrent local UI instances.
+- [x] Normalize historical overlap consistently across Today and Trends without
+  rewriting raw evidence or filling unobserved gaps.
 - [x] Validate macOS app/window/idle collection across permission denial,
   idle, sleep/wake, and offline operation on a real device with the repeatable
   checklist and database smoke check.

@@ -21,6 +21,7 @@ const TIMELINE_COLORS = [
   "#6877a2",
   "#95705a",
 ];
+export const IDLE_TIMELINE_COLOR = "#94a3b8";
 const emptyReviewSubjectIds: ReadonlySet<string> = new Set();
 
 export type TimelineAppBand = { app: string; appPath?: string; milliseconds: number; share: number; color: string };
@@ -44,17 +45,33 @@ export function buildTimelineClusters(segments: readonly Segment[]): TimelineClu
   const buckets: Array<{ startMs: number; endMs: number; winner: TimelineAppBand; totalMilliseconds: number }> = [];
   for (let startMs = 0; startMs < DAY_MS; startMs += BUCKET_MS) {
     const endMs = startMs + BUCKET_MS;
-    const totals = new Map<string, { app: string; appPath?: string; milliseconds: number }>();
+    const totals = new Map<string, { app: string; appPath?: string; milliseconds: number; idleMilliseconds: number }>();
     for (const segment of sorted) {
       const overlap = Math.max(0, Math.min(endMs, segment.endMs) - Math.max(startMs, segment.startMs));
       if (!overlap) continue;
       const key = appKey(segment.app, segment.appPath);
       const current = totals.get(key);
-      totals.set(key, { app: segment.app, appPath: segment.appPath, milliseconds: (current?.milliseconds ?? 0) + overlap });
+      totals.set(key, {
+        app: segment.app,
+        appPath: segment.appPath,
+        milliseconds: (current?.milliseconds ?? 0) + overlap,
+        idleMilliseconds: (current?.idleMilliseconds ?? 0) + (segment.category === "idle" ? overlap : 0),
+      });
     }
     const total = [...totals.values()].reduce((sum, item) => sum + item.milliseconds, 0);
     const top = [...totals.values()].sort((left, right) => right.milliseconds - left.milliseconds || left.app.localeCompare(right.app))[0];
-    if (top) buckets.push({ startMs, endMs, totalMilliseconds: total, winner: { ...top, share: top.milliseconds / total, color: colorForApp(top.app, top.appPath) } });
+    if (top) buckets.push({
+      startMs,
+      endMs,
+      totalMilliseconds: total,
+      winner: {
+        app: top.app,
+        appPath: top.appPath,
+        milliseconds: top.milliseconds,
+        share: top.milliseconds / total,
+        color: top.idleMilliseconds === top.milliseconds ? IDLE_TIMELINE_COLOR : colorForApp(top.app, top.appPath),
+      },
+    });
   }
 
   const merged: Array<{ startMs: number; endMs: number; winner: TimelineAppBand; totalMilliseconds: number }> = [];

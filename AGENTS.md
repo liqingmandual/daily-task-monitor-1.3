@@ -22,6 +22,7 @@ capture, key contents, cookies, or form contents.
 - `extensions/`: Chromium, Firefox, and Safari watcher source/manifests.
 - `src-tauri/src/desktop.rs`: Tauri commands and background workers.
 - `src-tauri/src/db.rs`: migrations and SQLite persistence.
+- `src-tauri/src/segment_overlap.rs`: canonical cross-platform activity timeline.
 - `src/`: React UI and Tauri bridge.
 - `docs/PRODUCT_AND_COMPETITORS.md`: product gap analysis and roadmap.
 - `docs/MACOS.md`: macOS implementation, permissions, and validation.
@@ -45,8 +46,9 @@ successful Windows/macOS CI run recorded in `docs/MACOS_P0_ACCEPTANCE.md`.
 - Keep unrelated user changes intact.
 - Concurrent desktop instances are intentionally allowed for local multi-agent
   development. Do not restore a process-wide single-instance lock without an
-  explicit product decision. Use one collector per database for acceptance
-  runs so captured evidence has one clear authority.
+  explicit product decision. The SQLite collector lease must keep one writer
+  authoritative per database, and reporting must normalize legacy overlaps
+  through the shared canonical activity timeline.
 
 ## Validation
 
