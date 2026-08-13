@@ -6,6 +6,10 @@ The current goal is local macOS development through `pnpm tauri dev`. Building,
 signing, notarizing, and distributing a `.app` or DMG is intentionally outside
 this phase.
 
+P0 trustworthy capture is accepted for this local-development scope. The
+real-device result and the successful cross-platform CI baseline are recorded
+in `docs/MACOS_P0_ACCEPTANCE.md`.
+
 The macOS port reuses the existing Tauri UI, SQLite database, monitor state
 machine, classification, trends, reports, and workflow engine. The native
 collector adds:
@@ -17,8 +21,9 @@ collector adds:
 - monotonic system uptime for continuity repair.
 
 Media playback detection is currently reported as false on macOS. Browser
-history discovery supports Chrome, Edge, Brave, and Arc profiles. Safari and
-Firefox need dedicated adapters or, preferably, the planned browser watcher.
+history discovery supports Chrome, Edge, Brave, and Arc profiles. Measured
+active-tab duration is provided separately by the browser watcher sources for
+Chromium, Firefox, and converted Safari extensions.
 
 ## Permissions
 
@@ -53,6 +58,10 @@ pnpm tauri dev
 
 If you do not want to install pnpm globally, use `npx --yes pnpm@10` in place
 of `pnpm`, for example `npx --yes pnpm@10 install --frozen-lockfile`.
+
+Concurrent application instances are allowed for deliberate local multi-agent
+development. Run ordinary acceptance checks with one collector per database;
+do not treat concurrent collectors as one authoritative capture session.
 
 ## Storage
 
