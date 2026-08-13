@@ -15,6 +15,8 @@ use tauri::menu::{Menu, MenuItemKind, PredefinedMenuItem};
 use tauri::menu::{MenuBuilder, MenuItem};
 use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager, State};
+#[cfg(target_os = "macos")]
+use tauri_plugin_notification::{NotificationExt, PermissionState};
 use url::Url;
 #[cfg(target_os = "windows")]
 use windows::Win32::Graphics::Gdi::{
@@ -1855,17 +1857,31 @@ fn update_focus_tray(app: &tauri::AppHandle, status: Option<&FocusTimerStatus>) 
 fn update_focus_tray(_app: &tauri::AppHandle, _status: Option<&FocusTimerStatus>) {}
 
 #[cfg(target_os = "macos")]
-fn send_focus_completed_notification() {
-    let _ = Command::new("osascript")
-        .args([
-            "-e",
-            "display notification \"本轮专注已经结束，起来活动一下吧。\" with title \"Orbit\" subtitle \"番茄钟结束\"",
-        ])
-        .status();
+fn send_focus_completed_notification(app: &tauri::AppHandle) {
+    let notification = app.notification();
+    let permission = match notification.permission_state() {
+        Ok(PermissionState::Granted) => PermissionState::Granted,
+        Ok(PermissionState::Prompt | PermissionState::PromptWithRationale) => {
+            match notification.request_permission() {
+                Ok(permission) => permission,
+                Err(_) => return,
+            }
+        }
+        Ok(PermissionState::Denied) | Err(_) => return,
+    };
+    if permission != PermissionState::Granted {
+        return;
+    }
+
+    let _ = notification
+        .builder()
+        .title("番茄钟结束")
+        .body("本轮专注已经结束，起来活动一下吧。")
+        .show();
 }
 
 #[cfg(not(target_os = "macos"))]
-fn send_focus_completed_notification() {}
+fn send_focus_completed_notification(_app: &tauri::AppHandle) {}
 
 fn update_focus_menu(app: &tauri::AppHandle, status: Option<&FocusTimerStatus>) {
     let Some(state) = app.try_state::<DesktopState>() else {
@@ -1924,7 +1940,7 @@ fn start_focus_timer_worker(app: tauri::AppHandle) {
                     last_status = Some(current);
                 }
                 if should_notify {
-                    send_focus_completed_notification();
+                    send_focus_completed_notification(&app);
                 }
             }
             std::thread::sleep(Duration::from_secs(1));
@@ -3408,6 +3424,7 @@ fn install_macos_app_menu(app: &mut tauri::App) -> tauri::Result<()> {
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             #[cfg(target_os = "macos")]
             install_macos_app_menu(app)?;
